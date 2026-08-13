@@ -1,0 +1,16 @@
+stages:
+  - trigger-e2e
+
+# interview-copilot has no tests of its own — the actual E2E pipe test
+# lives in the separate interview-copilot-e2e project, which checks this
+# project out as a sibling and runs against it. This job just makes sure
+# that test actually runs whenever main changes here, instead of only
+# running when someone happens to push to the e2e repo.
+trigger-e2e-tests:
+  stage: trigger-e2e
+  trigger:
+    project: navetoocool/interview-copilot-e2e
+    branch: main
+    strategy: depend
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
