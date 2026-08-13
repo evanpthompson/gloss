@@ -1,0 +1,10 @@
+.env
+.git
+.gitignore
+.venv
+.idea
+__pycache__
+*.pyc
+SPEC.md
+README.md
+a_listener.py

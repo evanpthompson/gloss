@@ -22,6 +22,7 @@ load_dotenv()  # must run before importing deepgram — it reads DEEPGRAM_API_KE
 import websockets
 from deepgram import AsyncDeepgramClient
 from deepgram.core.events import EventType
+from deepgram.environment import DeepgramClientEnvironment
 from deepgram.listen.v1.types import ListenV1Results
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
@@ -32,11 +33,26 @@ PORT = int(os.environ.get("B_SERVER_PORT", "8765"))
 SAMPLE_RATE = int(os.environ.get("B_SERVER_SAMPLE_RATE", "48000"))
 DEEPGRAM_API_KEY = os.environ.get("DEEPGRAM_API_KEY")
 
+# Testability hook: point the Deepgram client at a mock endpoint instead of
+# production, e.g. ws://mock-deepgram:9010, for offline/CI end-to-end
+# testing. Unset in normal use — real Deepgram is the default.
+DEEPGRAM_WS_URL = os.environ.get("DEEPGRAM_WS_URL")
+if DEEPGRAM_WS_URL:
+    _http_url = DEEPGRAM_WS_URL.replace("ws://", "http://").replace("wss://", "https://")
+    DEEPGRAM_ENVIRONMENT = DeepgramClientEnvironment(
+        base=_http_url,
+        production=DEEPGRAM_WS_URL,
+        agent=DEEPGRAM_WS_URL,
+        agent_rest=_http_url,
+    )
+else:
+    DEEPGRAM_ENVIRONMENT = DeepgramClientEnvironment.PRODUCTION
+
 CHANNELS = {"interviewer", "user"}
 
 
 async def bridge(a_ws: websockets.ServerConnection, label: str) -> None:
-    client = AsyncDeepgramClient(api_key=DEEPGRAM_API_KEY)
+    client = AsyncDeepgramClient(api_key=DEEPGRAM_API_KEY, environment=DEEPGRAM_ENVIRONMENT)
     started = time.monotonic()
 
     async with client.listen.v1.connect(
@@ -46,6 +62,7 @@ async def bridge(a_ws: websockets.ServerConnection, label: str) -> None:
         channels=1,
         endpointing=300,
         smart_format=True,
+        tag=label,
     ) as dg:
 
         def on_message(message: object) -> None:
