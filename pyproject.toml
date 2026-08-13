@@ -1,0 +1,15 @@
+[project]
+name = "interview-copilot"
+version = "0.1.0"
+description = "Phase 1: two-laptop live audio pipe for interview support"
+requires-python = ">=3.11"
+dependencies = [
+    "deepgram-sdk>=7.7.0",
+    "websockets>=17.0",
+    "soundcard>=0.4.3",
+    "numpy>=1.26",
+    "python-dotenv>=1.0",
+]
+
+[tool.uv]
+package = false
