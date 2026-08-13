@@ -197,6 +197,15 @@ standalone product.
 - Whether 3 display cards is the right number, or 1.
 - Same-LAN is a confirmed assumption (both laptops on the same network) —
   no tunnel planned for v1.
+- **Registry cleanup policy not set up.** CI pushes a `:<short-sha>` tag on
+  every run to both GitLab Container Registries (`interview-copilot/b-server`,
+  `interview-copilot-e2e/mock-deepgram`, `.../mock-listener`) alongside the
+  moving `:main` cache tag, and nothing ever deletes old SHA tags — they
+  accumulate indefinitely. Images are small so this isn't urgent, but
+  GitLab has a built-in per-repository expiration policy (Settings → Packages
+  and registries → Container registry → Cleanup policy — keep N most recent,
+  expire tags older than X, regex to exclude `main`) that should get turned
+  on for all three repositories at some point.
 
 ## Superseded work (do not revive)
 
