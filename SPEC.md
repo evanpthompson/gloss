@@ -1,16 +1,33 @@
-# Interview Copilot — Spec
+# Gloss — Spec
 
 Personal tool. Not a product. Supersedes the `unravel` hackathon app and the
 `reunravel/docs/REVIVAL_PLAN.md` 68-session plan — both are considered dead;
 see "Superseded work" below.
 
+## Name
+
+A *gloss* is a short explanation of an unfamiliar term, written alongside the
+text it explains. That is the whole product in one word.
+
+The tool was called `interview-copilot` until 2026-08-23. The name was wrong in
+both halves: "copilot" implies it answers for you, which it does not, and
+"interview" named one application as if it were the category. What it actually
+is, is a distributed rebuild of `unravel` — whose own README described it as
+"an aid for understanding meetings and presentations... lots of jargon and
+unfamiliar concepts."
+
 ## Problem
 
-Being interviewed is cognitively saturating. Two things would help live: (1)
-instant recall of your own prep — stories, facts, open questions — matched to
-whatever was just asked, and (2) a flag when the interviewer uses a term you
-don't recognize, so you can ask instead of bluff. Both have to cost about one
-second of glance, or they're worse than not having them.
+Any conversation dense with unfamiliar terms is cognitively saturating —
+technical presentations, vendor calls, domain hand-offs, interviews. Two things
+would help live: (1) instant recall of your own notes — stories, facts, open
+questions — matched to whatever was just said, and (2) a flag when the other
+side uses a term you don't recognize, so you can ask instead of bluff. Both
+have to cost about one second of glance, or they're worse than not having them.
+
+Neither one generates an answer for you. Tier 1 surfaces material you wrote
+yourself, before the call, and names jargon you should ask about. The design
+constraint below — no live web search — is partly what keeps it that way.
 
 Non-goal: a live transcript panel. You'd read it instead of listening.
 Non-goal: web-researched enrichment inside the live loop — see "Why not
@@ -198,8 +215,8 @@ standalone product.
 - Same-LAN is a confirmed assumption (both laptops on the same network) —
   no tunnel planned for v1.
 - **Registry cleanup policy not set up.** CI pushes a `:<short-sha>` tag on
-  every run to both GitLab Container Registries (`interview-copilot/b-server`,
-  `interview-copilot-e2e/mock-deepgram`, `.../mock-listener`) alongside the
+  every run to both GitLab Container Registries (`gloss/b-server`,
+  `gloss-e2e/mock-deepgram`, `.../mock-listener`) alongside the
   moving `:main` cache tag, and nothing ever deletes old SHA tags — they
   accumulate indefinitely. Images are small so this isn't urgent, but
   GitLab has a built-in per-repository expiration policy (Settings → Packages

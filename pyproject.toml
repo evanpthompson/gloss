@@ -1,7 +1,7 @@
 [project]
-name = "interview-copilot"
+name = "gloss"
 version = "0.1.0"
-description = "Phase 1: two-laptop live audio pipe for interview support"
+description = "Phase 1: two-laptop live audio pipe for real-time meeting comprehension"
 requires-python = ">=3.11"
 dependencies = [
     "deepgram-sdk>=7.7.0",

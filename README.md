@@ -1,6 +1,12 @@
-# Interview Copilot — Phase 1
+# Gloss — Phase 1
 
-Proves the pipe: audio captured on Laptop A (Windows, hosts the call)
+A live glossary for jargon-heavy calls. Gloss listens to both sides of a
+remote conversation on a second machine and surfaces two things at a glance:
+notes you wrote before the call, matched to what was just said, and a flag on
+any term you don't recognize. It does not answer for you — see `SPEC.md`
+§Name for why it isn't called what it used to be called.
+
+**Phase 1 (this) proves the pipe:** audio captured on Laptop A (Windows, hosts the call)
 arrives on Laptop B (this Mac) as two correctly-labeled live transcript
 streams. Nothing else — no enrichment, no display, no LLM calls. See
 `SPEC.md` for the full design and what Phase 2/3 add later.
