@@ -5,7 +5,7 @@ description = "Phase 1: two-laptop live audio pipe for real-time meeting compreh
 requires-python = ">=3.11"
 dependencies = [
     "deepgram-sdk>=7.7.0",
-    "websockets>=14.0,<17.0",
+    "websockets>=14.0",
     "soundcard>=0.4.3",
     "numpy>=1.26",
     "python-dotenv>=1.0",
@@ -14,3 +14,10 @@ dependencies = [
 
 [tool.uv]
 package = false
+# google-genai caps websockets <17.0, but it only uses websockets for the Live
+# API (bidirectional streaming). gloss reaches Gemini over HTTP via
+# generate_content and never touches that path, so the cap is transitive and
+# irrelevant here. Overridden so the audio pipe -- the thing that actually
+# depends on websockets -- runs the current release. Revisit if gloss ever
+# adopts the Live API.
+override-dependencies = ["websockets>=17.0"]

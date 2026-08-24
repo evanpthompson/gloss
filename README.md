@@ -72,15 +72,30 @@ with an elapsed-time marker so you can eyeball end-to-end latency:
 
 Cards on a second screen, driven by the interviewer's end-of-turn.
 
-**0. Pick a provider.** Defaults to Gemini, which has a free tier — get a key
-at [aistudio.google.com/apikey](https://aistudio.google.com/apikey) and put it
-in `.env` as `GEMINI_API_KEY`. Any LangChain provider works; swapping is two
-env vars plus that provider's package:
+**0. Pick a provider.** Defaults to Gemini — get a key at
+[aistudio.google.com/apikey](https://aistudio.google.com/apikey) and put it in
+`.env` as `GEMINI_API_KEY`.
+
+> **The Gemini free tier will not run this.** Measured 2026-08-23:
+> `gemini-3.6-flash` free tier is **20 requests per day**
+> (`GenerateRequestsPerDayPerProjectPerModel-FreeTier`). This design budgets
+> ~15–25 calls *per hour*, so one conversation exhausts a day. Enable billing
+> on the API project, or use a provider below. Past the quota you get an
+> "Enrichment is down" card on every turn — which is at least visible, but the
+> screen is then useless for the rest of the call.
+
+Any LangChain provider works; swapping is two env vars plus that provider's
+package:
 
 ```
 GLOSS_PROVIDER=anthropic GLOSS_MODEL=claude-haiku-4-5   # uv add langchain-anthropic
-GLOSS_PROVIDER=ollama    GLOSS_MODEL=llama3.1           # uv add langchain-ollama
+GLOSS_PROVIDER=ollama    GLOSS_MODEL=llama3.1           # uv add langchain-ollama, no quota, local
 ```
+
+A failing call now fails fast rather than retrying: `GLOSS_MAX_RETRIES=1` and
+`GLOSS_TIMEOUT_S=10`. A quota 429 was measured blocking a single call for 40.4s
+across four backoff retries — mid-conversation that is worse than failing,
+since the next turn supersedes the request anyway.
 
 **1. Build a prep pack.** One directory of `*.md` per conversation, loaded in
 sorted filename order. Ask Claude Code for the `gloss-prep` skill rather than

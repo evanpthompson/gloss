@@ -217,6 +217,17 @@ else:
             model_provider=PROVIDER,
             temperature=0.3,
             max_tokens=512,  # three short cards; a bigger ceiling only adds latency
+            # Fail fast rather than retrying. Measured 2026-08-23: a quota 429
+            # on the Gemini free tier sent the SDK into four backoff retries and
+            # one call took 40.4s, the last retry asking to wait another 58s.
+            # Mid-conversation a blocked call is worse than a failed one — the
+            # next turn supersedes it anyway, and an error card at least says
+            # something is wrong. Raise these only if a provider is flaky rather
+            # than rate-limiting. 10s is Gemini's enforced minimum deadline — it
+            # rejects anything shorter with a 400, so this is a ceiling on a
+            # stuck call, not a target; the design budget is still 1-2s.
+            max_retries=int(os.environ.get("GLOSS_MAX_RETRIES", "1")),
+            timeout=float(os.environ.get("GLOSS_TIMEOUT_S", "10")),
             **MODEL_KWARGS,
         )
     except Exception as _exc:  # missing key, unknown provider, bad kwarg
