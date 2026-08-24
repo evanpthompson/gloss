@@ -1,18 +1,25 @@
 """
-Phase 1: prove the pipe.
+Phases 1-2: the pipe, plus Tier 1 enrichment.
 
 Accepts two labeled raw-PCM WebSocket streams from Laptop A
-(ws://<this-machine>:8765/interviewer and .../user), relays each to its own
-Deepgram streaming connection, and prints labeled transcript lines with
-elapsed time so end-to-end latency can be eyeballed.
+(ws://<this-machine>:8765/interviewer and .../user) and relays each to its own
+Deepgram streaming connection.
 
-No enrichment, no display, no LLM calls — that's Phase 2+.
+On each end-of-turn (`speech_final`) from the *interviewer* channel, sends the
+recent transcript plus the prep pack to an LLM and broadcasts at most three
+glanceable cards to any display client on .../display. See SPEC.md "Phase 2
+design" for the trigger, card schema, cache shape and noise-control rules.
+
+Tier 2 post-call research export is Phase 3 and is not here.
 """
 
 import asyncio
+import json
 import logging
 import os
 import time
+from collections import deque
+from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -21,6 +28,8 @@ load_dotenv()  # must run before importing deepgram — it reads DEEPGRAM_API_KE
 
 import websockets
 from deepgram import AsyncDeepgramClient
+from langchain.chat_models import init_chat_model
+from langchain_core.messages import HumanMessage, SystemMessage
 from deepgram.core.events import EventType
 from deepgram.environment import DeepgramClientEnvironment
 from deepgram.listen.v1.types import ListenV1Results
@@ -50,10 +59,234 @@ else:
 
 CHANNELS = {"interviewer", "user"}
 
+# --- Tier 1 enrichment (Phase 2) -------------------------------------------
+
+# Provider-agnostic on purpose: nothing below this line knows which vendor is
+# answering. Swapping to Claude, Bedrock or a local Ollama model is two env
+# vars and a `uv add` of that provider package — no code change. Note Gemini is
+# NOT available via Bedrock, so "bedrock" and "google_genai" are alternatives
+# to each other, not layers.
+MODEL = os.environ.get("GLOSS_MODEL", "gemini-3.6-flash")
+PROVIDER = os.environ.get("GLOSS_PROVIDER", "google_genai")
+# Escape hatch for provider-specific knobs, as JSON, so they stay out of the
+# code. Set this — it is not optional in practice. Measured 2026-08-23 on
+# gemini-3.6-flash with the example pack: default thinking 2.7s and 4.4s,
+# thinking_level "low" 15.6s, thinking_level "minimal" 1.7s and 1.3s. Only
+# "minimal" fits the 1-2s budget. Note 3.x rejects thinking_budget (400); that
+# parameter was 2.5-era.
+MODEL_KWARGS = json.loads(os.environ.get("GLOSS_MODEL_KWARGS", "{}"))
+SESSION_DIR = Path(os.environ.get("GLOSS_SESSION", "sessions/example"))
+MIN_CHARS = int(os.environ.get("GLOSS_MIN_CHARS", "25"))
+MAX_CARDS = int(os.environ.get("GLOSS_MAX_CARDS", "3"))
+WINDOW_TURNS = int(os.environ.get("GLOSS_WINDOW_TURNS", "6"))
+
+# Frozen. Nothing per-request may be interpolated into this string or into the
+# prep pack below it — both sit in the cached prefix, and one timestamp here
+# means the cache is rewritten every turn and never read. See SPEC.md.
+INSTRUCTIONS = f"""\
+You support someone who is in a live conversation right now. They can spare
+about one second to look at their second screen. You never speak to them and
+you never answer the question for them.
+
+You emit at most {MAX_CARDS} cards about the MOST RECENT interviewer turn only.
+
+Two kinds, and nothing else:
+
+- "recall": the notes below already cover what was just asked. Quote or
+  tightly compress what the notes actually say. Never invent a fact, a
+  number, or an anecdote that is not written there. If the notes do not
+  cover it, there is no recall card — that is the whole point of this kind.
+- "jargon": the interviewer used a term, tool, or acronym the person may not
+  know. Name it and define it in one line, so they can ask a good question
+  instead of bluffing past it.
+
+Fields: `label` is at most 6 words and is the only part that gets read at a
+glance. `detail` is at most 25 words.
+
+Returning an empty list is the correct answer for most turns. Small talk,
+logistics, a question already covered by the previous card, an utterance
+that is not really a question — all of these get zero cards. Do not
+manufacture a card to seem useful; a screen that always has something on it
+is a screen that stops being looked at.
+
+The notes below are the person's own preparation, written before the call.
+--- NOTES ---
+"""
+
+CARD_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "cards": {
+            "type": "array",
+            "maxItems": MAX_CARDS,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "kind": {"type": "string", "enum": ["recall", "jargon"]},
+                    "label": {"type": "string"},
+                    "detail": {"type": "string"},
+                },
+                "required": ["kind", "label", "detail"],
+            },
+        }
+    },
+    "required": ["cards"],
+}
+
+
+def load_prep_pack(directory: Path) -> str:
+    """Concatenate the prep pack in sorted filename order.
+
+    Sorted, not glob order: the bytes must be identical across restarts or the
+    cached prefix changes for no visible reason.
+    """
+    if not directory.is_dir():
+        log.warning("No prep pack at %s — recall cards will be impossible", directory)
+        return "(no notes were provided for this conversation)"
+    files = sorted(directory.glob("*.md"))
+    if not files:
+        log.warning("No .md files in %s — recall cards will be impossible", directory)
+        return "(no notes were provided for this conversation)"
+    log.info("Prep pack: %s", ", ".join(f.name for f in files))
+    return "\n\n".join(f.read_text(encoding="utf-8").strip() for f in files)
+
+
+SYSTEM_PROMPT = INSTRUCTIONS + load_prep_pack(SESSION_DIR)
+
+try:
+    _base_llm = init_chat_model(
+        MODEL,
+        model_provider=PROVIDER,
+        temperature=0.3,
+        max_tokens=512,  # three short cards; a bigger ceiling only adds latency
+        **MODEL_KWARGS,
+    )
+except Exception as _exc:  # missing key, unknown provider, bad kwarg
+    raise SystemExit(
+        f"Cannot configure {PROVIDER}:{MODEL} — {type(_exc).__name__}: {_exc}\n"
+        "Set that provider's key (google_genai -> GEMINI_API_KEY, from "
+        "https://aistudio.google.com/apikey), or change GLOSS_PROVIDER/GLOSS_MODEL."
+    ) from _exc
+
+# include_raw keeps the underlying message alongside the parsed cards, so the
+# token/cache counters in enrich() stay observable. Without it the parsed dict
+# is all you get and the cache diagnostics silently never fire.
+llm = _base_llm.with_structured_output(CARD_SCHEMA, include_raw=True)
+
+# Built once, so the prompt prefix is byte-identical on every turn. Every
+# provider worth using caches on a prefix match, and none of them can do it if
+# the prefix is rebuilt per request — this is why SYSTEM_PROMPT is frozen.
+SYSTEM_MESSAGE = SystemMessage(SYSTEM_PROMPT)
+
+transcript: deque[tuple[str, str]] = deque(maxlen=WINDOW_TURNS)
+displays: set[websockets.ServerConnection] = set()
+_inflight: asyncio.Task | None = None
+_logged_cache_stats = False
+
+
+async def broadcast(payload: dict) -> None:
+    if not displays:
+        return
+    message = json.dumps(payload)
+    # Snapshot: a send failure mutates `displays` via the handler's finally.
+    await asyncio.gather(
+        *(ws.send(message) for ws in list(displays)), return_exceptions=True
+    )
+
+
+async def enrich() -> None:
+    """One Tier 1 pass over the current transcript window."""
+    global _logged_cache_stats
+
+    window = "\n".join(f"[{who}] {text}" for who, text in transcript)
+    started = time.monotonic()
+    try:
+        result = await llm.ainvoke(
+            [
+                SYSTEM_MESSAGE,
+                HumanMessage(
+                    f"{window}\n\nCards for the final [interviewer] turn only."
+                ),
+            ]
+        )
+        # Inside the try on purpose: a schema mismatch is a failure that has to
+        # reach the screen like any other, not an exception that escapes into
+        # the task and leaves the display showing a normal quiet turn.
+        if result.get("parsing_error"):
+            raise ValueError(f"schema mismatch: {result['parsing_error']}")
+        raw_cards = (result.get("parsed") or {}).get("cards", [])
+        # `required` in the schema is not actually enforced: asked for zero
+        # cards, Gemini 3.6 returns [{}] rather than []. An empty object would
+        # render as three `undefined`s on the display, so drop anything that
+        # isn't a complete card. Zero cards is the normal case here, which is
+        # exactly why a malformed one must not survive.
+        cards = [
+            c
+            for c in raw_cards
+            if isinstance(c, dict) and all(c.get(k) for k in ("kind", "label", "detail"))
+        ][:MAX_CARDS]
+        if len(cards) != len(raw_cards):
+            log.debug("Dropped %d malformed card(s)", len(raw_cards) - len(cards))
+    except asyncio.CancelledError:
+        raise  # superseded by a newer turn — expected, not an error
+    except Exception as exc:
+        # A failed call must never look like a quiet turn. Zero cards is the
+        # normal state here, so a silent failure is invisible for the rest of
+        # the call — the display has to say so out loud.
+        log.exception("Tier 1 enrichment failed")
+        await broadcast(
+            {
+                "type": "cards",
+                "cards": [
+                    {
+                        "kind": "error",
+                        "label": "Enrichment is down",
+                        "detail": f"{type(exc).__name__}: {str(exc)[:120]}",
+                    }
+                ],
+            }
+        )
+        return
+
+    if not _logged_cache_stats:
+        # Logged once per run. Caching is automatic and silent on every
+        # provider, and a prep pack under the provider's minimum simply never
+        # caches — see sessions/README.md. Shapes differ by provider, so read
+        # defensively rather than assuming any field exists.
+        usage = getattr(result.get("raw"), "usage_metadata", None) or {}
+        if usage:
+            details = usage.get("input_token_details") or {}
+            log.info(
+                "Tokens: in=%s out=%s cache_read=%s",
+                usage.get("input_tokens"),
+                usage.get("output_tokens"),
+                details.get("cache_read", "n/a"),
+            )
+        _logged_cache_stats = True
+
+    elapsed = time.monotonic() - started
+    log.info("[cards +%4.1fs] %s", elapsed, cards if cards else "(none)")
+    if cards:
+        await broadcast({"type": "cards", "cards": cards})
+
+
+def on_turn_end(text: str) -> None:
+    """Interviewer finished a turn — supersede any in-flight pass with this one."""
+    global _inflight
+    if len(text) < MIN_CHARS:
+        return  # "mm-hm", "right, yeah" — turn-taking, not a question
+    if _inflight and not _inflight.done():
+        _inflight.cancel()  # a card about the previous question is worse than none
+    _inflight = asyncio.create_task(enrich())
+
 
 async def bridge(a_ws: websockets.ServerConnection, label: str) -> None:
     client = AsyncDeepgramClient(api_key=DEEPGRAM_API_KEY, environment=DEEPGRAM_ENVIRONMENT)
     started = time.monotonic()
+    # The Deepgram SDK invokes `on_message` as a plain callback; capturing the
+    # loop and going through call_soon_threadsafe is correct whether or not it
+    # happens to run on the loop thread.
+    loop = asyncio.get_running_loop()
 
     async with client.listen.v1.connect(
         model="nova-3",
@@ -69,12 +302,21 @@ async def bridge(a_ws: websockets.ServerConnection, label: str) -> None:
             if not isinstance(message, ListenV1Results):
                 return
             alternatives = message.channel.alternatives if message.channel else []
-            transcript = alternatives[0].transcript if alternatives else ""
-            if not transcript:
+            text = alternatives[0].transcript if alternatives else ""
+            if not text:
                 return
             tag = "FINAL" if message.speech_final else "final" if message.is_final else "interim"
             elapsed = time.monotonic() - started
-            log.info("[%s/%s +%5.1fs] %s", label, tag, elapsed, transcript)
+            log.info("[%s/%s +%5.1fs] %s", label, tag, elapsed, text)
+
+            if not message.speech_final:
+                return
+            transcript.append((label, text))
+            # Only the interviewer's turns trigger: cards about what you just
+            # said yourself are noise. The user channel still lands in the
+            # window above, because it is context for the next question.
+            if label == "interviewer":
+                loop.call_soon_threadsafe(on_turn_end, text)
 
         dg.on(EventType.OPEN, lambda _: log.info("[%s] Deepgram connection open", label))
         dg.on(EventType.MESSAGE, on_message)
@@ -94,6 +336,17 @@ async def bridge(a_ws: websockets.ServerConnection, label: str) -> None:
 
 async def handler(a_ws: websockets.ServerConnection) -> None:
     label = a_ws.request.path.strip("/")
+
+    if label == "display":
+        log.info("[display] second screen connected")
+        displays.add(a_ws)
+        try:
+            await a_ws.wait_closed()
+        finally:
+            displays.discard(a_ws)
+            log.info("[display] second screen disconnected")
+        return
+
     if label not in CHANNELS:
         log.warning("Rejecting connection on unknown path: %s", a_ws.request.path)
         await a_ws.close(code=4404, reason="unknown channel")
@@ -112,8 +365,24 @@ async def main() -> None:
     if not os.environ.get("DEEPGRAM_API_KEY"):
         raise SystemExit("DEEPGRAM_API_KEY is not set — put it in .env (see .env.example)")
 
+    # Prove credentials, model id and structured-output support before the
+    # conversation starts rather than on the first question. It costs one tiny
+    # call. Refusing to start is the right failure here: discovering any of
+    # this mid-conversation is the expensive case, and structured output is
+    # exactly the thing most likely to differ between providers.
+    try:
+        await llm.ainvoke([SYSTEM_MESSAGE, HumanMessage("[interviewer] hello")])
+    except Exception as exc:
+        raise SystemExit(
+            f"Cannot reach {PROVIDER}:{MODEL} — {type(exc).__name__}: {exc}\n"
+            "Check GLOSS_PROVIDER / GLOSS_MODEL and that provider's key is set "
+            "(google_genai -> GEMINI_API_KEY, https://aistudio.google.com/apikey)."
+        ) from exc
+    log.info("Preflight OK: %s:%s answered and matched the card schema", PROVIDER, MODEL)
+
     async with websockets.serve(handler, HOST, PORT, max_size=None):
-        log.info("Listening on ws://%s:%s/{interviewer,user}", HOST, PORT)
+        log.info("Listening on ws://%s:%s/{interviewer,user,display}", HOST, PORT)
+        log.info("Tier 1: %s, notes from %s, max %s cards", MODEL, SESSION_DIR, MAX_CARDS)
         await asyncio.Future()  # run forever
 
 

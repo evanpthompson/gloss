@@ -4,5 +4,8 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .pytest_cache/
-sessions/
+# Real prep packs name a company and a person; only the template is checked in.
+sessions/*
+!sessions/README.md
+!sessions/example/
 .idea/

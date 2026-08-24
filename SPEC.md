@@ -46,9 +46,9 @@ Laptop A (Windows, hosts the call, BT headphones)     Laptop B (Mac, this machin
 │                            │                          │   turn-end trigger            │
 │ built-in mic ──────────────────── PCM/WS ────────────→│ Deepgram (user channel)       │
 │   (user; keeps headset on  │                          │        ↓ text                 │
-│    A2DP, not HFP)          │                          │   Tier 1: Haiku + prep pack   │
+│    A2DP, not HFP)          │                          │   Tier 1: LLM + prep pack     │
 └──────────────────────────┘                          │        ↓ cards (1–2s)         │
-   ~40 lines, no API keys                              │        ↓ SSE                  │
+   ~40 lines, no API keys                              │        ↓ WebSocket            │
                                                         │   display.html (2nd screen)   │
                                                         └───────────────────────────────┘
 ```
@@ -57,7 +57,7 @@ Three files plus per-interview prep:
 
 ```
 a_listener.py     ~40 lines, runs on Windows, no secrets
-b_server.py       ~150–200 lines, runs on the Mac, holds all API keys
+b_server.py       ~375 lines, runs on the Mac, holds all API keys
 display.html      ~80 lines, the glanceable second screen
 sessions/<name>/  prep pack for one specific interview (markdown)
 ```
@@ -121,8 +121,8 @@ hundreds.
 
 **Tier 0 (prepared-context retrieval) is not a separate tier.** Originally
 planned as an instant lookup layer against your prep docs. Collapsed into
-Tier 1: put the whole prep pack in the Haiku system prompt with a cache
-breakpoint, let the model do the matching as part of its normal job. No
+Tier 1: put the whole prep pack in the cached system prompt and let the
+model do the matching as part of its normal job. No
 retrieval layer, no index, no embeddings — and it handles paraphrase
 ("tell me about influencing without authority" → `Story 5`), which a
 keyword index can't. ~$0.0015/call on cached reads.
@@ -196,9 +196,121 @@ from that."*
 Deepgram account, or build Phase 1 against a stub/local transcriber first
 so the pipe is provable before signing up for anything?
 
-**Phase 2 (deferred, not yet specced in detail)** — Tier 1 enrichment:
-prep-pack system prompt, turn-end trigger, card schema, `display.html`
-over SSE.
+**Phase 2 — Tier 1 enrichment.** Turn-end trigger → LLM + prep pack →
+at most 3 cards → `display.html`. Specced in detail below.
+
+### Phase 2 design
+
+**Trigger: `speech_final` on the interviewer channel only.** The user's own
+channel is transcribed (Phase 3 needs it, and it's on screen for context)
+but never triggers enrichment — you don't need cards about what you just
+said. `speech_final` is Deepgram's end-of-turn signal, which is the point
+where the question is complete and a card is still useful.
+
+**Two card kinds, both derived from material that already exists:**
+
+| `kind` | Source | Answers |
+|--------|--------|---------|
+| `recall` | the prep pack you wrote | "you already have a story for this" |
+| `jargon` | the model's own knowledge | "you may not know this term — ask" |
+
+A `recall` card must quote your prep pack, not paraphrase it into new
+claims. A `jargon` card names the term and gives a one-line definition, so
+the move is to *ask a better question*, not to bluff. Nothing here composes
+an answer for you — that is the line this design does not cross, and the
+"no live web search" decision below is what keeps it enforceable.
+
+**Card schema** — `{kind, label, detail}`, at most 3 per turn:
+- `label`: ≤ 6 words. This is the part you actually read at a glance.
+- `detail`: ≤ 25 words, the reminder underneath.
+- Returning **zero** cards is correct and expected for most turns. The
+  system prompt says so explicitly, because a model that always finds
+  something to say trains you to stop looking at the screen.
+
+**Prompt shape, built for the cache:**
+
+```
+system  = [ frozen instructions + card rules + prep pack ]  ← cache_control
+messages = [ rolling window of the last N transcript turns ]  ← volatile
+```
+
+The prep pack is the whole point of the cache: it is the same bytes on
+every turn of a one-hour call. Nothing per-request may appear in `system` —
+no timestamp, no turn counter, no session id — or the prefix changes every
+turn and the cache never reads. Prep-pack files are concatenated in
+**sorted filename order** so the bytes are deterministic across restarts.
+
+**Cache minimums are a real constraint, and they fail silently.** Every
+provider has a floor below which a prefix is simply never cached, and none
+of them raise an error about it — the counters just stay at zero. Gemini 3.x
+Flash and Claude Haiku 4.5 both need ~4096 tokens. (Gemini 2.5 Flash's floor
+was 2048, but 2.5 is closed to new API users as of 2026-08 — the API says so
+in the 404 and names 3.6 Flash as the replacement.) A short prep pack therefore gets
+no caching at all, whoever is answering. `b_server.py` logs the token
+counters on the first enrichment of each run so this is visible rather than
+assumed.
+
+Caching here buys latency more than cost. At Flash/Haiku input prices an
+hour of turns is worth cents either way, but a cache read is materially
+faster than reprocessing the pack, and the whole design budget is 1–2
+seconds.
+
+### Provider abstraction
+
+Nothing below the config block in `b_server.py` knows which vendor is
+answering. The model is built through LangChain's `init_chat_model`, and the
+card schema through `.with_structured_output()`, so switching providers is
+two environment variables and a `uv add` of that provider's package:
+
+```
+GLOSS_PROVIDER=google_genai   GLOSS_MODEL=gemini-2.5-flash    # default
+GLOSS_PROVIDER=anthropic      GLOSS_MODEL=claude-haiku-4-5
+GLOSS_PROVIDER=bedrock        GLOSS_MODEL=anthropic.claude-...
+GLOSS_PROVIDER=ollama         GLOSS_MODEL=llama3.1            # nothing leaves the machine
+```
+
+**Bedrock is an alternative to Gemini, not a layer over it.** `unravel` used
+Bedrock, and it remains a good option for Claude/Llama/Mistral behind one AWS
+bill — but Google models are not in its catalog, so Bedrock cannot reach
+Gemini. Picking Bedrock as "the abstraction" would have quietly ruled out the
+default model above. LangChain sits a level higher and covers both.
+
+Provider-specific knobs stay out of the code and live in `GLOSS_MODEL_KWARGS`
+as JSON. For the default model this is load-bearing, not decorative.
+
+**Measured 2026-08-23, gemini-3.6-flash, example pack, two turns:**
+
+| `thinking_level` | latency | verdict |
+|---|---|---|
+| unset (default) | 2.7s, 4.4s | over budget |
+| `"low"` | 15.6s, 3.2s | far over budget |
+| `"minimal"` | 1.7s, 1.3s | **inside the 1–2s budget** |
+
+So `GLOSS_MODEL_KWARGS={"thinking_level": "minimal"}` ships uncommented in
+`.env.example`. Note that `thinking_budget` — the 2.5-era parameter — is
+rejected outright with a 400 on 3.x.
+
+The one thing that does *not* abstract away is the prompt: prefix caching is
+prefix caching everywhere, so `SYSTEM_PROMPT` is built once at startup and the
+volatile transcript always goes last, whichever provider is configured.
+
+**Noise control:**
+- Utterances shorter than `GLOSS_MIN_CHARS` (default 25) never trigger a
+  call — "mm-hm", "right", "yeah exactly" are turn-taking, not questions.
+- One enrichment in flight at a time. A new turn **cancels** the previous
+  in-flight call rather than queueing behind it: a card about the previous
+  question is worse than no card, because it arrives while you're being
+  asked a different one.
+
+**Transport: WebSocket, not SSE.** The architecture diagram above said SSE
+until Phase 2; that was never a reasoned decision. `b_server.py` is
+already a WebSocket server, and `handler` already dispatches on path — so
+`display.html` connects to `ws://localhost:8765/display` and receives the
+same card JSON, costing zero new dependencies and zero new listeners. SSE
+would need an HTTP server that this process otherwise has no reason to run.
+`display.html` opens straight off disk as a `file://` page; WebSocket has no
+CORS preflight, so a `null` origin connects to localhost without a server to
+serve the page itself.
 
 **Phase 3 (deferred)** — post-call export: Tier 2 research pass over the
 saved transcript, grounded citations, written to a study-guide markdown

@@ -1,0 +1,85 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>gloss</title>
+<style>
+  :root {
+    --bg: #0f1115; --fg: #e8e8ea; --dim: #6b7280;
+    --recall: #7dd3a0; --jargon: #f0b45f; --error: #ef4444;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: var(--bg); color: var(--fg); height: 100vh;
+    font: 16px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    display: flex; flex-direction: column; padding: 3vh 3vw; gap: 2vh;
+  }
+  /* Cards are sized to be read in about a second from a second screen,
+     not to fit a lot of text. If it doesn't fit, it was too long. */
+  #cards { flex: 1; display: flex; flex-direction: column; gap: 2vh; justify-content: center; }
+  .card {
+    border-left: 4px solid var(--kind); padding: 1.4vh 0 1.4vh 1.6vw;
+    animation: in 140ms ease-out;
+  }
+  .card[data-kind="recall"] { --kind: var(--recall); }
+  .card[data-kind="jargon"] { --kind: var(--jargon); }
+  /* Zero cards is the normal state, so a broken backend has to look loud —
+     otherwise "down" and "nothing to say" are the same blank screen. */
+  .card[data-kind="error"] { --kind: var(--error); }
+  .label { font-size: clamp(20px, 3.2vw, 46px); font-weight: 600; letter-spacing: -0.01em; }
+  .detail { font-size: clamp(13px, 1.4vw, 21px); color: var(--dim); margin-top: 0.5vh; }
+  .tag {
+    font-size: clamp(10px, 0.85vw, 13px); text-transform: uppercase;
+    letter-spacing: 0.12em; color: var(--kind); margin-bottom: 0.4vh;
+  }
+  @keyframes in { from { opacity: 0; transform: translateY(6px); } }
+  /* Empty is the normal state, not an error — most turns produce no cards. */
+  #idle { color: var(--dim); font-size: clamp(13px, 1.3vw, 18px); text-align: center; }
+  #status { font-size: 12px; color: var(--dim); display: flex; gap: 0.6em; align-items: center; }
+  #dot { width: 8px; height: 8px; border-radius: 50%; background: #ef4444; }
+  #dot.up { background: var(--recall); }
+</style>
+
+<div id="cards"><div id="idle">listening</div></div>
+<div id="status"><span id="dot"></span><span id="state">connecting</span></div>
+
+<script>
+  const cards = document.getElementById("cards");
+  const dot = document.getElementById("dot");
+  const state = document.getElementById("state");
+  const url = (location.search.match(/[?&]ws=([^&]+)/) || [])[1] || "ws://localhost:8765/display";
+
+  const idle = () => { cards.innerHTML = '<div id="idle">listening</div>'; };
+
+  function render(list) {
+    if (!list.length) return;           // keep the previous cards up; blanking mid-glance loses them
+    cards.innerHTML = "";
+    for (const c of list) {
+      const el = document.createElement("div");
+      el.className = "card";
+      el.dataset.kind = c.kind;
+      el.innerHTML =
+        `<div class="tag"></div><div class="label"></div><div class="detail"></div>`;
+      el.querySelector(".tag").textContent =
+        { recall: "your notes", jargon: "unfamiliar term", error: "not working" }[c.kind] || c.kind;
+      el.querySelector(".label").textContent = c.label;
+      el.querySelector(".detail").textContent = c.detail;
+      cards.appendChild(el);
+    }
+  }
+
+  function connect() {
+    const ws = new WebSocket(decodeURIComponent(url));
+    ws.onopen = () => { dot.classList.add("up"); state.textContent = "connected"; idle(); };
+    ws.onmessage = (e) => {
+      const msg = JSON.parse(e.data);
+      if (msg.type === "cards") render(msg.cards);
+      if (msg.type === "clear") idle();
+    };
+    ws.onclose = () => {
+      dot.classList.remove("up");
+      state.textContent = "reconnecting";
+      setTimeout(connect, 1000);        // b_server restarts often during a session; just come back
+    };
+    ws.onerror = () => ws.close();
+  }
+  connect();
+</script>
