@@ -79,6 +79,16 @@ SESSION_DIR = Path(os.environ.get("GLOSS_SESSION", "sessions/example"))
 MIN_CHARS = int(os.environ.get("GLOSS_MIN_CHARS", "25"))
 MAX_CARDS = int(os.environ.get("GLOSS_MAX_CARDS", "3"))
 WINDOW_TURNS = int(os.environ.get("GLOSS_WINDOW_TURNS", "6"))
+# Anthropic only. 5m is the API default and a cache write does NOT refresh an
+# earlier breakpoint's clock, so a five-minute lull mid-conversation evicts the
+# prefix and the next turn pays full input price instead of a tenth of it. "1h"
+# costs 2x on the one write rather than 1.25x — a fraction of a cent on a 4k
+# prefix — and removes the cliff. Drop to "5m" only with a measured reason.
+CACHE_TTL = os.environ.get("GLOSS_CACHE_TTL", "1h")
+# Caching fails silently everywhere: under the provider's minimum prefix size
+# nothing caches, no error is raised, and the counters just read zero. Set this
+# to watch every turn rather than only the first.
+LOG_CACHE = os.environ.get("GLOSS_LOG_CACHE", "") not in ("", "0", "false")
 
 # Frozen. Nothing per-request may be interpolated into this string or into the
 # prep pack below it — both sit in the cached prefix, and one timestamp here
@@ -114,6 +124,12 @@ The notes below are the person's own preparation, written before the call.
 """
 
 CARD_SCHEMA = {
+    # `title` is not decoration. Gemini tolerates a schema without one, but
+    # langchain-anthropic routes structured output through tool-calling and a
+    # tool must have a name — without this it raises "Unsupported function" at
+    # import, before a single call is made. Naming it as a verb also tells the
+    # model what the schema is for, which is the one place a provider sees it.
+    "title": "emit_cards",
     "type": "object",
     "properties": {
         "cards": {
@@ -245,7 +261,25 @@ else:
 # Built once, so the prompt prefix is byte-identical on every turn. Every
 # provider worth using caches on a prefix match, and none of them can do it if
 # the prefix is rebuilt per request — this is why SYSTEM_PROMPT is frozen.
-SYSTEM_MESSAGE = SystemMessage(SYSTEM_PROMPT)
+#
+# Anthropic is the one provider that needs the cache boundary named out loud: a
+# `cache_control` block marks where the reusable prefix ends. Everything else
+# caches implicitly on a prefix match and takes no marker, so they get the
+# plain string. Two provider shapes is the honest price of a mixed chain — it
+# is confined to this one expression on purpose, rather than leaking into
+# enrich(). See PHASE-3-PLAN.md § "Fallback chain".
+if PROVIDER == "anthropic":
+    SYSTEM_MESSAGE = SystemMessage(
+        content=[
+            {
+                "type": "text",
+                "text": SYSTEM_PROMPT,
+                "cache_control": {"type": "ephemeral", "ttl": CACHE_TTL},
+            }
+        ]
+    )
+else:
+    SYSTEM_MESSAGE = SystemMessage(SYSTEM_PROMPT)
 
 transcript: deque[tuple[str, str]] = deque(maxlen=WINDOW_TURNS)
 displays: set[websockets.ServerConnection] = set()
@@ -317,19 +351,23 @@ async def enrich() -> None:
         )
         return
 
-    if not _logged_cache_stats:
-        # Logged once per run. Caching is automatic and silent on every
-        # provider, and a prep pack under the provider's minimum simply never
-        # caches — see sessions/README.md. Shapes differ by provider, so read
-        # defensively rather than assuming any field exists.
+    if LOG_CACHE or not _logged_cache_stats:
+        # Once per run by default, every turn under GLOSS_LOG_CACHE=1. Caching
+        # is silent on every provider — a prep pack under the provider's
+        # minimum never caches and says nothing about it (see
+        # sessions/README.md), so these counters are the only evidence it is
+        # working. A run with cache_read stuck at 0 is a failed run even when
+        # every card is correct. Shapes differ by provider, so read defensively
+        # rather than assuming any field exists.
         usage = getattr(result.get("raw"), "usage_metadata", None) or {}
         if usage:
             details = usage.get("input_token_details") or {}
             log.info(
-                "Tokens: in=%s out=%s cache_read=%s",
+                "Tokens: in=%s out=%s cache_read=%s cache_write=%s",
                 usage.get("input_tokens"),
                 usage.get("output_tokens"),
                 details.get("cache_read", "n/a"),
+                details.get("cache_creation", "n/a"),
             )
         _logged_cache_stats = True
 
