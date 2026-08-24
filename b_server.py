@@ -153,25 +153,83 @@ def load_prep_pack(directory: Path) -> str:
 
 SYSTEM_PROMPT = INSTRUCTIONS + load_prep_pack(SESSION_DIR)
 
-try:
-    _base_llm = init_chat_model(
-        MODEL,
-        model_provider=PROVIDER,
-        temperature=0.3,
-        max_tokens=512,  # three short cards; a bigger ceiling only adds latency
-        **MODEL_KWARGS,
-    )
-except Exception as _exc:  # missing key, unknown provider, bad kwarg
-    raise SystemExit(
-        f"Cannot configure {PROVIDER}:{MODEL} — {type(_exc).__name__}: {_exc}\n"
-        "Set that provider's key (google_genai -> GEMINI_API_KEY, from "
-        "https://aistudio.google.com/apikey), or change GLOSS_PROVIDER/GLOSS_MODEL."
-    ) from _exc
+class _FakeLLM:
+    """Offline stand-in for the enrichment model, for the E2E pipe test.
 
-# include_raw keeps the underlying message alongside the parsed cards, so the
-# token/cache counters in enrich() stay observable. Without it the parsed dict
-# is all you get and the cache diagnostics silently never fire.
-llm = _base_llm.with_structured_output(CARD_SCHEMA, include_raw=True)
+    The E2E suite exists to prove the audio pipe, and mocks every external
+    service — there is no LLM provider in it any more than there is a real
+    Deepgram. This is the same shape as DEEPGRAM_WS_URL: unset means real,
+    set means mocked.
+
+    It is reached only by an explicit GLOSS_PROVIDER=fake, and it still
+    requires a key to be configured — the E2E stack supplies a dummy one, the
+    same way it supplies DEEPGRAM_API_KEY. Letting the fake run keyless would
+    make it the one path where credential plumbing goes untested, which is
+    exactly the path you want tested: a deployment that forgot the key should
+    fail in CI, not in a live conversation.
+    """
+
+    async def ainvoke(self, messages: list) -> dict:
+        return {
+            "raw": None,
+            "parsed": {
+                "cards": [
+                    {
+                        "kind": "jargon",
+                        "label": "fake provider",
+                        "detail": "GLOSS_PROVIDER=fake — canned card, no model was called.",
+                    }
+                ]
+            },
+            "parsing_error": None,
+        }
+
+
+if PROVIDER == "fake":
+    # Still requires a key, so the fake path exercises the same credential
+    # requirement as a real one rather than quietly skipping it.
+    #
+    # Named explicitly rather than matched on a "*_API_KEY" suffix: DEEPGRAM_API_KEY
+    # is always set here and would satisfy any such pattern, so the guard would
+    # never once fire. Add the variable when adding a provider.
+    if not any(
+        os.environ.get(name)
+        for name in (
+            "GEMINI_API_KEY",
+            "GOOGLE_API_KEY",
+            "ANTHROPIC_API_KEY",
+            "OPENAI_API_KEY",
+            "AWS_ACCESS_KEY_ID",
+        )
+    ):
+        raise SystemExit(
+            "GLOSS_PROVIDER=fake still requires a model-provider key to be set.\n"
+            "The fake does not call out, but it must not be the one path where "
+            "missing credentials go unnoticed — set a dummy key, e.g.\n"
+            "  GEMINI_API_KEY=unused-mock-key"
+        )
+    log.warning("GLOSS_PROVIDER=fake — enrichment is canned, no model will be called")
+    llm = _FakeLLM()
+else:
+    try:
+        _base_llm = init_chat_model(
+            MODEL,
+            model_provider=PROVIDER,
+            temperature=0.3,
+            max_tokens=512,  # three short cards; a bigger ceiling only adds latency
+            **MODEL_KWARGS,
+        )
+    except Exception as _exc:  # missing key, unknown provider, bad kwarg
+        raise SystemExit(
+            f"Cannot configure {PROVIDER}:{MODEL} — {type(_exc).__name__}: {_exc}\n"
+            "Set that provider's key (google_genai -> GEMINI_API_KEY, from "
+            "https://aistudio.google.com/apikey), or change GLOSS_PROVIDER/GLOSS_MODEL."
+        ) from _exc
+
+    # include_raw keeps the underlying message alongside the parsed cards, so
+    # the token/cache counters in enrich() stay observable. Without it the
+    # parsed dict is all you get and the cache diagnostics never fire.
+    llm = _base_llm.with_structured_output(CARD_SCHEMA, include_raw=True)
 
 # Built once, so the prompt prefix is byte-identical on every turn. Every
 # provider worth using caches on a prefix match, and none of them can do it if
