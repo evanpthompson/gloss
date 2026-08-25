@@ -342,6 +342,64 @@ logged rather than dropped quietly.
 
 #### The fallback chain
 
+The chain's last link is **not a model at all**. `local` answers from a
+glossary built offline from books already on disk — no network, no tokens,
+microseconds. It is the floor under the chain: it runs only when every vendor
+above it has failed, and it can only ever emit `jargon` cards, because a
+`recall` card claims the person's own notes say something and a book is not
+their notes.
+
+**It is a floor, not a first pass.** Putting it in front of the models would
+suppress recall cards, which are the more valuable kind and which only a model
+can write.
+
+**A glossary miss reports the vendor's failure, not its own.**
+`with_fallbacks()` re-raises only the last link's exception, and the last link
+is the glossary — so without care, "no glossary term in this turn" is what
+reaches the screen during a total outage. Each link records its failure for the
+turn, and the error card names the first one with a recognisable reason.
+
+#### Why a glossary and not retrieval — measured 2026-08-25
+
+Lexical retrieval over the same corpus was built first, and it does not work.
+BM25 over 129,117 filtered sentences from 32 books, on ten test terms:
+
+| | usable answers |
+|---|---|
+| BM25 over book sentences | **3 / 10** |
+| offline LLM glossary pass | **17 / 18** |
+
+The reason is structural rather than tunable. **These books are prose *about*
+concepts, not a reference work *defining* them.** The best sentence containing
+"circuit breaker pattern" is "the circuit breaker pattern can help here to
+handle system dependencies" — a mention, and no ranking function turns a
+mention into a definition. Books explain across paragraphs; a card has 25 words.
+
+Two failures along the way are worth keeping:
+
+* **Back matter wins BM25.** An index page is nothing but keywords, so it
+  out-scores every real explanation of the same term. Eight of the first ten
+  results were index entries, TOC dotted leaders or code imports.
+* **Bag-of-words retrieval answers confidently about the wrong term.** "Chaos
+  engineering" returned "Context engineering is a core component of
+  orchestration". Phrase-anchoring fixed it, and is why `Glossary.lookup`
+  matches whole terms on word boundaries rather than scoring tokens.
+
+So the reading happens **once, offline**, where there is no latency budget and
+no conversation waiting: `tools/build_kb.py` sends each passage to a model and
+asks what it *defines*. Build-time tokens are not conversation-time tokens —
+the whole 32-book corpus costs about a dollar, once, and the live path then
+answers from a dict for nothing. The builder refuses to start above
+`--max-cost` (default $2), because a build script that quietly emptied the
+account funding the live fallback chain would take out the reliability it
+exists to add.
+
+**Apostrophes are deleted from lookup keys, not treated as separators.** A
+speech recogniser rarely emits one: Nova-3 transcribes Conway's Law as "conways
+law". Splitting on the apostrophe made every possessive term in the glossary
+permanently unmatchable while looking entirely correct in the file.
+
+
 One vendor is a single point of failure for a conversation that is happening
 right now and cannot be rescheduled. `GLOSS_FALLBACKS` (default `deepseek`)
 names the vendors tried behind `GLOSS_PROVIDER`, in order:

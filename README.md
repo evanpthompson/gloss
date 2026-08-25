@@ -150,11 +150,30 @@ invisible for the rest of the conversation.
 short an interviewer turn has to be before it counts as turn-taking rather than
 a question), `GLOSS_WINDOW_TURNS`.
 
+## Local knowledge base (optional)
+
+The chain's last link answers from a glossary built offline from books on disk
+— no model, no network, no tokens. Build it once:
+
+```bash
+uv run python tools/build_kb.py ~/files/automation/resources/project_books --estimate
+uv run python tools/build_kb.py ~/files/automation/resources/project_books
+```
+
+`--estimate` prints the cost and sends nothing. The build refuses to start
+above `--max-cost` (default $2). The output is `kb/glossary.json`, which is
+gitignored: it is reproducible from the builder, and it is derived from books
+that are not ours to redistribute.
+
+Without it, the `local` link is dropped with a warning and the chain runs on
+its vendors alone.
+
 ## Tests
+
 
 ```bash
 uv sync                       # dev dependencies included
-uv run pytest                 # 132 tests, ~20s
+uv run pytest                 # 154 tests, ~25s
 uv run ruff check .
 ```
 
@@ -177,6 +196,7 @@ pass.
 | `test_cards.py` | unit | the card contract, and what gets dropped |
 | `test_providers.py` | unit | the provider allow-list and its refusals |
 | `test_chain.py` | integration | the fallback chain through the real SDKs |
+| `test_kb.py` | unit | the local glossary — mostly what it refuses to answer |
 | `test_display.py` | browser | card lifecycle in `display.html`, in real Chromium |
 
 The end-to-end audio pipe test lives in the separate `gloss-e2e` project; it

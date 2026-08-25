@@ -467,7 +467,7 @@ error cards against the cap failed the one that exists for it.
 
 ---
 
-### S5 — Local retrieval, as a tag-team and a floor (not started)
+### S5 — Local retrieval, as the chain's floor
 
 A last link that answers from local data with no model behind it. It is the only
 link that survives both vendors being out, and on the turns it can answer it
@@ -544,6 +544,39 @@ Worth knowing about for offline work; wrong shape for a live conversation.
 **Done when:** with both vendors unreachable, a jargon term from the books still
 produces a correct card; and a term the books do not cover produces nothing at
 all rather than a low-confidence guess.
+
+**Result: PASSED 2026-08-25**, and the design changed on the way. Step 2 above
+said BM25 or TF-IDF. That was built first and **measured at 3 usable answers out
+of 10**, for a structural reason: these books are prose *about* concepts, not a
+reference work *defining* them, so the best sentence containing "circuit breaker
+pattern" is a mention rather than a definition. Ranking cannot fix that.
+
+The reading moved offline instead. `tools/build_kb.py` sends each passage to a
+model and asks what it *defines*; the same corpus then scored **17 usable
+entries out of 18**. Build-time tokens are not conversation-time tokens — the
+whole 32-book corpus costs about a dollar, once — and what ships is a plain dict
+the live path queries for zero tokens and zero network. The full comparison is
+in SPEC.md.
+
+Three findings worth not rediscovering:
+
+* **Back matter wins BM25.** An index page is nothing but keywords, so it
+  out-scores every real explanation. Eight of the first ten results were index
+  entries, TOC dotted leaders or code imports.
+* **Bag-of-words retrieval is confidently wrong.** "Chaos engineering" returned
+  "Context engineering is a core component of orchestration" — the worst
+  possible failure for a screen with no model above it to disagree. Lookup is
+  whole-phrase on word boundaries for this reason.
+* **A glossary miss must report the vendor's failure, not its own.**
+  `with_fallbacks()` re-raises only the last link's exception, and the last link
+  is the glossary, so a total outage was about to display "no glossary term in
+  this turn". Links now record their failures per turn and the card names the
+  first with a recognisable reason.
+
+Also fixed by a test rather than by inspection: apostrophes were being treated
+as separators, so `Conway's Law` keyed as `conway s law` while Nova-3
+transcribes it "conways law" — every possessive term in the glossary was
+permanently unmatchable and the file looked perfectly correct.
 
 #### Recogniser priming — done 2026-08-25, outside the S-numbers
 

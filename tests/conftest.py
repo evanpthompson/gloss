@@ -57,6 +57,9 @@ def build_server(monkeypatch: pytest.MonkeyPatch, pack: Path):
             "GEMINI_API_KEY": "test-gemini",
             "DEEPGRAM_API_KEY": "test-deepgram",
             "GLOSS_TIMEOUT_S": "5",
+            # Port 0 so a test that reaches websockets.serve cannot collide
+            # with a real b_server on the developer's machine.
+            "B_SERVER_PORT": "0",
             "GLOSS_MAX_RETRIES": "0",
         }
         for key, value in {**defaults, **env}.items():

@@ -35,6 +35,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableLambda
 
 import failures
+import kb
 import keyterms
 import providers
 from cards import card_schema, valid_cards
@@ -199,6 +200,12 @@ SYSTEM_PROMPT = INSTRUCTIONS + PREP_PACK
 # Nova-3 caps keyterms at 500 tokens per request and errors above that, so the
 # list is filled in rank order and the overflow is reported rather than dropped
 # quietly. See keyterms.py for what counts as a term and why.
+# The local knowledge base, if one has been built. Loaded once at startup: it
+# is a plain dict and the live path never touches disk or the network for it.
+GLOSSARY = kb.Glossary.load(Path(os.environ.get("GLOSS_KB", str(kb.DEFAULT_PATH))))
+if len(GLOSSARY):
+    log.info("Glossary: %d terms loaded", len(GLOSSARY))
+
 KEYTERM_BUDGET = int(os.environ.get("GLOSS_KEYTERM_BUDGET", str(keyterms.DEFAULT_BUDGET_TOKENS)))
 KEYTERMS, _keyterms_dropped = keyterms.from_pack(PREP_PACK, KEYTERM_BUDGET)
 if KEYTERMS:
@@ -247,6 +254,28 @@ class _FakeLLM:
         }
 
 
+class _Glossary:
+    """The local knowledge base, shaped like a model so the chain can hold it.
+
+    It reads the newest interviewer turn rather than the rendered prompt — a
+    dictionary has no use for a system prompt, a transcript or a cache
+    breakpoint — and returns at most one card.
+
+    **It raises when it does not know a term**, rather than answering with zero
+    cards. Zero cards is how a *quiet turn* looks, and this link only ever runs
+    because every vendor above it has already failed. Reporting "nothing to
+    say" there would turn a total outage into a normal-looking screen, which is
+    the one thing enrich() exists to prevent.
+    """
+
+    async def ainvoke(self, _messages: list) -> dict:
+        text = transcript[-1][1] if transcript else ""
+        card = GLOSSARY.card(text)
+        if card is None:
+            raise LookupError("no glossary term in this turn")
+        return {"raw": None, "parsed": {"cards": [card]}, "parsing_error": None}
+
+
 # Every provider states its own credential variables, including the fake. The
 # fake does not call out, but it must not be the one path where missing
 # credentials go unnoticed — a deployment that forgot the key should fail in CI
@@ -276,7 +305,7 @@ FALLBACK_NAMES: list[str] = (
     if PROVIDER == "fake"
     else [
         name.strip()
-        for name in os.environ.get("GLOSS_FALLBACKS", "deepseek").split(",")
+        for name in os.environ.get("GLOSS_FALLBACKS", "deepseek,local").split(",")
         if name.strip() and name.strip() != PROVIDER
     ]
 )
@@ -293,6 +322,18 @@ for _name in FALLBACK_NAMES:
             f"Known providers: {', '.join(sorted(providers.PROFILES))}.\n"
             "Add a row to providers.py before naming it in a chain."
         )
+    if _name == "local" and not len(GLOSSARY):
+        # An unbuilt knowledge base is a benign, expected state — the file is
+        # optional and kb.Glossary.load() returns empty rather than raising.
+        # Dropping the link with a warning is right here, where refusing to
+        # boot would punish every deployment that has not run the builder. A
+        # glossary that exists but is malformed is a different matter: that
+        # raises out of load() above, before this point.
+        log.warning(
+            "Glossary link requested but no terms are loaded — dropping it. "
+            "Build one with: uv run python tools/build_kb.py <books-dir>"
+        )
+        continue
     _fallback = providers.PROFILES[_name]
     # A fallback that cannot authenticate is not a fallback, and you would find
     # that out during the outage it exists for. Refuse at startup instead, and
@@ -402,6 +443,8 @@ def make_link(name: str, profile: providers.Profile):
     if name == "fake":
         log.warning("GLOSS_PROVIDER=fake — enrichment is canned, no model will be called")
         model = _FakeLLM()
+    elif name == "local":
+        model = _Glossary()
     else:
         # include_raw keeps the underlying message alongside the parsed cards,
         # so the token/cache counters in enrich() stay observable. Without it
@@ -421,6 +464,14 @@ def make_link(name: str, profile: providers.Profile):
             raise ProviderUnavailable(label, reason, "retired earlier this session")
         try:
             result = await model.ainvoke([system, build_turn_message(profile)])
+        except LookupError as exc:
+            # The glossary simply does not cover this turn. Not a vendor
+            # failure, and not this link's reason to report — the chain fell
+            # this far because something above it broke, and that is the thing
+            # worth putting on screen.
+            failure = ProviderUnavailable(label, failures.Reason.UNKNOWN, str(exc))
+            _turn_failures.append(failure)
+            raise failure from exc
         except Exception as exc:
             reason = failures.classify(exc)
             detail = str(getattr(exc, "message", "") or exc)[:200]
@@ -438,7 +489,9 @@ def make_link(name: str, profile: providers.Profile):
                 )
             else:
                 log.warning("%s unavailable — %s: %s", label, reason, detail)
-            raise ProviderUnavailable(label, reason, detail) from exc
+            failure = ProviderUnavailable(label, reason, detail)
+            _turn_failures.append(failure)
+            raise failure from exc
         return {**result, "provider": name, "model": profile.model}
 
     return RunnableLambda(run, name=f"link:{name}")
@@ -454,6 +507,14 @@ if len(LINKS) > 1:
     )
     log.info("Chain: %s", " → ".join(f"{n}:{p.model}" for n, p, _ in LINKS))
 
+
+# Failures raised by each link during the current turn, oldest first.
+#
+# `with_fallbacks()` re-raises only the LAST link's exception, which is the
+# wrong one to show: the chain reaches its final link precisely because
+# something above it broke, and "the glossary does not cover this turn" is not
+# what a person needs to read when both vendors are down.
+_turn_failures: list[ProviderUnavailable] = []
 
 transcript: list[tuple[str, str]] = []
 displays: set[websockets.ServerConnection] = set()
@@ -549,6 +610,7 @@ async def enrich() -> None:
     global _logged_cache_stats, _answered_by
 
     started = time.monotonic()
+    _turn_failures.clear()
     try:
         result = await chain.ainvoke(None)
         # Inside the try on purpose: a schema mismatch is a failure that has to
@@ -591,7 +653,11 @@ async def enrich() -> None:
         # showing. A person glancing at a second screen mid-conversation can act
         # on "out of credit"; they cannot act on "APIStatusError".
         if isinstance(exc, ProviderUnavailable):
-            reason, detail = exc.reason, exc.detail
+            # The first link to fail for a recognisable reason is the one that
+            # explains the turn. Falling back to the raised exception covers
+            # the case where every reason was unrecognised.
+            named = next((f for f in _turn_failures if f.reason is not failures.Reason.UNKNOWN), exc)
+            reason, detail = named.reason, named.detail
         else:
             reason = failures.classify(exc)
             detail = f"{type(exc).__name__}: {exc}"
@@ -766,6 +832,12 @@ async def main() -> None:
     # all — which is empty at startup, so each sends the frozen system prefix
     # plus the constant ASK and nothing else.
     for name, profile, link in LINKS:
+        if name == "local":
+            # Asking it a question here would fail by design: the transcript is
+            # empty, so it knows nothing, and it reports not-knowing as a
+            # failure. What proves this link is that it has terms in it.
+            log.info("Preflight OK: local:glossary holds %d terms", len(GLOSSARY))
+            continue
         try:
             await link.ainvoke(None)
         except Exception as exc:

@@ -12,6 +12,7 @@ No keys, no network, no spend, so this gates in CI.
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
 
@@ -226,3 +227,115 @@ def test_a_dead_link_refuses_the_boot_rather_than_starting_degraded(chained, ven
     with pytest.raises(SystemExit) as caught:
         asyncio.run(chained.main())
     assert "Cannot reach" in str(caught.value)
+
+
+# --- the local glossary as the chain's floor --------------------------------
+
+GLOSSARY = {"entries": [
+    {"term": "Kestrel", "definition": "A deploy gate that changes must clear before shipping.",
+     "source": "test"},
+]}
+
+
+@pytest.fixture
+def with_glossary(build_server, vendor: FakeVendor, tmp_path):
+    """A three-link chain whose last link is the local glossary."""
+    base = vendor.start()
+    path = tmp_path / "glossary.json"
+    path.write_text(json.dumps(GLOSSARY))
+    server = build_server(
+        GLOSS_PROVIDER="anthropic",
+        GLOSS_FALLBACKS="deepseek,local",
+        GLOSS_KB=str(path),
+        ANTHROPIC_BASE_URL=base,
+        ANTHROPIC_API_URL=base,
+        DEEPSEEK_API_BASE=base,
+    )
+    sent: list[dict] = []
+
+    async def capture(payload: dict) -> None:
+        sent.append(payload)
+
+    server.broadcast = capture
+    server.sent = sent
+    return server
+
+
+def test_the_glossary_joins_the_chain_as_its_last_link(with_glossary) -> None:
+    assert [name for name, _, _ in with_glossary.LINKS] == ["anthropic", "deepseek", "local"]
+
+
+async def test_the_glossary_answers_when_every_vendor_is_out(with_glossary, vendor) -> None:
+    """The floor under the chain: no network, no tokens, still a card."""
+    vendor.fail(503, "server_overloaded", "overloaded", times=4)
+    with_glossary.transcript.append(TURN)
+    await with_glossary.enrich()
+    card = only_card(with_glossary)
+    assert card["kind"] == "jargon"
+    assert card["label"] == "Kestrel"
+
+
+async def test_the_glossary_costs_nothing_when_the_vendors_are_healthy(with_glossary, vendor) -> None:
+    """It is a floor, not a first pass. A healthy primary means it never runs —
+    and it must never pre-empt a recall card, which only a model can write."""
+    vendor.cards(CARD)
+    with_glossary.transcript.append(TURN)
+    await with_glossary.enrich()
+    assert only_card(with_glossary)["label"] == "Kestrel"
+    assert vendor.calls_to("deepseek") == 0
+
+
+async def test_a_glossary_miss_reports_the_vendor_failure_not_its_own(with_glossary, vendor) -> None:
+    """`with_fallbacks` re-raises only the LAST link's exception, and the last
+    link is the glossary. "No glossary term in this turn" is not what someone
+    needs to read when both vendors are down."""
+    vendor.fail(402, "billing_error", "out of credit", times=4)
+    with_glossary.transcript.append(("interviewer", "Tell me about a time you disagreed with a manager."))
+    await with_glossary.enrich()
+    card = only_card(with_glossary)
+    assert card["kind"] == "error"
+    assert card["label"] == "Provider out of credit", "the glossary's miss masked the real failure"
+
+
+def test_an_unbuilt_glossary_drops_the_link_rather_than_blocking_the_boot(build_server, tmp_path) -> None:
+    """The knowledge base is optional and its absence is benign. Refusing to
+    start would punish every deployment that has not run the builder."""
+    server = build_server(GLOSS_PROVIDER="anthropic", GLOSS_FALLBACKS="deepseek,local",
+                          GLOSS_KB=str(tmp_path / "not-built.json"))
+    assert [name for name, _, _ in server.LINKS] == ["anthropic", "deepseek"]
+
+
+def test_a_malformed_glossary_refuses_the_boot(build_server, tmp_path) -> None:
+    """A file that exists but is wrong is a build that went wrong."""
+    path = tmp_path / "glossary.json"
+    path.write_text(json.dumps({"entries": [{"term": "x"}]}))
+    with pytest.raises(Exception, match=r"alidation|definition"):
+        build_server(GLOSS_PROVIDER="anthropic", GLOSS_FALLBACKS="local", GLOSS_KB=str(path))
+
+
+async def test_the_glossary_cannot_be_preflighted_by_being_asked(with_glossary) -> None:
+    """Which is why main() proves it by counting its terms instead.
+
+    On an empty transcript the glossary knows nothing, and it reports
+    not-knowing as a failure — so a preflight that asked it a question would
+    refuse every boot.
+    """
+    local = next(link for name, _, link in with_glossary.LINKS if name == "local")
+    with pytest.raises(with_glossary.ProviderUnavailable):
+        await local.ainvoke(None)
+
+
+async def test_the_boot_survives_a_glossary_that_cannot_answer_yet(with_glossary, vendor) -> None:
+    """main() preflights every link, and asking the glossary a question would
+    refuse every boot. Reaching the serve loop is what proves it was skipped.
+    """
+    vendor.cards(times=4)
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(with_glossary.main(), 3)   # got past preflight, now serving
+
+
+async def test_the_boot_still_refuses_when_a_vendor_link_is_dead(with_glossary, vendor) -> None:
+    """The glossary being exempt must not exempt anything else."""
+    vendor.fail(401, "authentication_error", "invalid key", times=4)
+    with pytest.raises(SystemExit, match="Cannot reach"):
+        await asyncio.wait_for(with_glossary.main(), 5)

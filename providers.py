@@ -146,6 +146,22 @@ PROFILES: dict[str, Profile] = {
         cache_min_tokens=128,
         note="Phase 3 fallback link. 1M context; caching implicit, no opt-in.",
     ),
+    "local": Profile(
+        model="glossary",
+        kwargs={},
+        # No credential, because nothing leaves the machine. This is the only
+        # row in the table that is not a model at all: it answers from a
+        # dictionary built offline by tools/build_kb.py.
+        key_env=(),
+        key_url="(built offline: uv run python tools/build_kb.py <books>)",
+        cache_breakpoint=False,
+        cache_min_tokens=0,  # nothing is sent, so nothing can fail to cache
+        note=(
+            "Local glossary. No model, no network, no tokens, microseconds. "
+            "Emits jargon cards only — a recall card claims the person's own "
+            "notes say something, and a book is not their notes."
+        ),
+    ),
     "ollama": Profile(
         model="llama3.2",
         kwargs={},
