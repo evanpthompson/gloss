@@ -71,7 +71,7 @@ def main() -> int:
     # than against whichever one was hardcoded here.
     ap.add_argument(
         "--provider",
-        default=os.environ.get("GLOSS_PROVIDER", "google_genai"),
+        default=os.environ.get("GLOSS_PROVIDER", "anthropic"),
         choices=sorted(PROFILES),
     )
     args = ap.parse_args()

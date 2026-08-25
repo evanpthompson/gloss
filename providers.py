@@ -101,7 +101,10 @@ PROFILES: dict[str, Profile] = {
         # number is left as documented rather than replaced with a guess; treat
         # it as unconfirmed until a run shows cache_read climbing.
         cache_min_tokens=4096,
-        note="Phase 2 default. Free tier is 20 requests/day, per model, per project.",
+        note=(
+            "NO LONGER A TARGET as of 2026-08-24 — kept working, not maintained. "
+            "Free tier is 20 requests/day, per model, per project."
+        ),
     ),
     "deepseek": Profile(
         model="deepseek-v4-flash",
@@ -169,7 +172,11 @@ def resolve(env: dict[str, str]) -> tuple[str, Profile, list[str]]:
     """
     import json
 
-    provider = env.get("GLOSS_PROVIDER", "google_genai")
+    # Anthropic by default: it is the Phase 3 primary, and defaulting to a
+    # provider that is no longer a target would mean gloss boots onto one
+    # nobody is maintaining. Failing loudly on an unfunded primary beats
+    # quietly succeeding on a dropped one.
+    provider = env.get("GLOSS_PROVIDER", "anthropic")
     if provider not in PROFILES:
         raise ProfileError(
             f"Unknown GLOSS_PROVIDER={provider!r}.\n"
