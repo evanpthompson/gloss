@@ -588,6 +588,37 @@ unrecoverable by anything downstream. `GRIFFON` → `Griffin` failed both times:
 priming does not beat a homophone, and S5's retrieval has to assume some terms
 arrive wrong. Full numbers and the extraction rules are in SPEC.md.
 
+### S6 — The instant preview (done 2026-08-25)
+
+The tag-team idea, in the form that turned out to be safe.
+
+The original framing was for the local knowledge base to answer the easy turns
+*instead of* the model, to save tokens. Two things made that the wrong shape.
+Tokens are not where the cost is — S2's caching put a turn at 99.4% cache-read
+and the whole chain at pennies an hour — and, more importantly, whether a turn
+also deserves a **recall** card cannot be known without asking. Recall is the
+more useful kind and only a model can write one, so answering instead of the
+model trades the better card for a faster one.
+
+What is safe is answering *first*. The glossary paints in 200µs–680µs, the
+chain in 1.1–1.8s, and S4 made the two compose: same topic id, same slot, the
+model's text replacing the glossary's in place with no flash. Measured live:
+
+```
+   0.3 ms  [jargon] Eventual consistency — The system will eventually reach a consistent state…
+1603.2 ms  [jargon] Eventual consistency — Distributed systems guarantee: all replicas converge…
+```
+
+A preview the model does not corroborate is **retracted** — the server sends
+`expire` with the ids and the display takes them down — rather than left to sit
+beside the model's own card on a different topic. A quiet turn retracts too: the
+model read the whole conversation and had nothing to say, which is a better
+judgement than a keyword match. And a preview carries a short TTL regardless, so
+an unconfirmed guess fades even if the enrichment pass never returns.
+
+**This is the first feature that depends on the card lifecycle from S4.** Before
+it, painting twice in one turn would simply have flashed twice.
+
 ## Open questions
 
 1. ~~**Is DeepSeek's context caching automatic, and does it need any

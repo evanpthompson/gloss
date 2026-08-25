@@ -139,6 +139,10 @@
     ws.onmessage = (e) => {
       const msg = JSON.parse(e.data);
       if (msg.type === "cards") render(msg.cards, msg.max);
+      // A card painted from the local glossary the instant a turn ended, which
+      // the model then did not corroborate. Taken down rather than left to
+      // time out beside the model's own card on the same topic.
+      if (msg.type === "expire") (msg.ids || []).forEach(remove);
       if (msg.type === "clear") wipe();
     };
     ws.onclose = () => {

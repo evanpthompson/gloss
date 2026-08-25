@@ -173,7 +173,7 @@ its vendors alone.
 
 ```bash
 uv sync                       # dev dependencies included
-uv run pytest                 # 154 tests, ~25s
+uv run pytest                 # 165 tests, ~25s
 uv run ruff check .
 ```
 

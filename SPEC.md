@@ -359,6 +359,44 @@ is the glossary — so without care, "no glossary term in this turn" is what
 reaches the screen during a total outage. Each link records its failure for the
 turn, and the error card names the first one with a recognisable reason.
 
+#### The instant preview — latency, not tokens
+
+The chain answers in 1.1–1.8s. The glossary answers in **200µs on a hit and
+680µs on a miss** (a linear scan of 5,622 terms). So when a turn ends, the
+glossary paints immediately and the model supersedes it when it arrives.
+
+Measured live on the real path, one turn:
+
+```
+   0.3 ms  [jargon] Eventual consistency — The system will eventually reach a consistent state…
+1603.2 ms  [jargon] Eventual consistency — Distributed systems guarantee: all replicas converge…
+```
+
+Same topic id, so the second updates the first **in place** — one card, better
+text, no flash. That is what the S4 card lifecycle was built for, and this is
+the first thing to depend on it.
+
+**It does not replace the model call, and that is the point.** Whether a turn
+also deserves a `recall` card — the more useful kind, and the one only a model
+can write — cannot be known without asking. A glossary that answered *instead*
+of the model would trade the better card for a faster one. So this buys
+**latency, not tokens**: the model is asked either way.
+
+**An unconfirmed preview is retracted, not left to time out.** The preview is a
+keyword match; the model read the whole conversation. If the model's cards do
+not include the previewed topic — or if it returns no cards at all, which is
+the normal turn — the server sends `{"type": "expire", "ids": [...]}` and the
+display takes the card down. Left standing, the guess would sit beside the
+model's own card on a different topic, which is exactly the duplication the
+card lifecycle exists to prevent.
+
+Belt and braces: a preview also carries a short `GLOSS_PREVIEW_TTL_S` (12s), so
+an unconfirmed guess fades on its own even if the enrichment pass never returns
+at all. When the model confirms it, the same card is rewritten with the full
+90s TTL.
+
+Set `GLOSS_PREVIEW=` empty to turn it off and wait for the model every turn.
+
 #### Why a glossary and not retrieval — measured 2026-08-25
 
 Lexical retrieval over the same corpus was built first, and it does not work.

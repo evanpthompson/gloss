@@ -313,3 +313,41 @@ def test_the_payloads_the_server_actually_sends_render(page: Display) -> None:
     )
     page.turn(*payload["cards"], max_cards=payload["max"])
     assert page.labels == ["Kestrel"]
+
+
+# --- retracting an unconfirmed preview --------------------------------------
+
+
+def test_a_named_card_can_be_taken_back_down(page: Display) -> None:
+    """The server paints a glossary card the instant a turn ends, then retracts
+    it if the model says something different. Without this the guess would sit
+    beside the model's own card on the same topic — the duplication the whole
+    lifecycle exists to prevent."""
+    page.turn(card("kestrel", "Kestrel"), card("bm25", "BM25"))
+    page.settle()
+    assert page.labels == ["Kestrel", "BM25"]
+
+    page.page.evaluate("() => remove('kestrel')")
+    page.settle()
+    assert page.labels == ["BM25"]
+
+
+def test_expiring_an_unknown_id_is_harmless(page: Display) -> None:
+    """The server retracts by id without tracking what each display has; one
+    that connected late may never have seen the card."""
+    page.turn(card("kestrel", "Kestrel"))
+    page.page.evaluate("() => remove('never-existed')")
+    page.settle()
+    assert page.labels == ["Kestrel"]
+
+
+def test_a_confirmed_preview_is_updated_not_duplicated(page: Display) -> None:
+    """The glossary and the model agreeing on a topic id is the good case: one
+    card, better text, full TTL, no flash."""
+    page.turn(card("kestrel", "Kestrel", "A deploy gate.", ttl=12))     # preview
+    page.stamp("Kestrel", "preview")
+    page.turn(card("kestrel", "Kestrel", "Their gate; they raised it twice.", ttl=90))
+    page.settle()
+    assert page.labels == ["Kestrel"]
+    assert page.stamped("preview"), "the model's card replaced the node instead of updating it"
+    assert page.detail("Kestrel") == "Their gate; they raised it twice."

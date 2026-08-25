@@ -339,3 +339,111 @@ async def test_the_boot_still_refuses_when_a_vendor_link_is_dead(with_glossary, 
     vendor.fail(401, "authentication_error", "invalid key", times=4)
     with pytest.raises(SystemExit, match="Cannot reach"):
         await asyncio.wait_for(with_glossary.main(), 5)
+
+
+# --- the instant preview ----------------------------------------------------
+
+JARGON_TURN = ("interviewer", "We gate every deploy through Kestrel. Thoughts on that?")
+
+
+async def test_the_glossary_paints_before_any_model_is_asked(with_glossary, vendor) -> None:
+    """The chain answers in 1.1-1.8s; a dict answers in microseconds. On a live
+    call that gap is the difference between reading a definition while the
+    interviewer is still talking and reading it afterwards."""
+    with_glossary.transcript.append(JARGON_TURN)
+    await with_glossary.preview(JARGON_TURN[1])
+    assert only_card(with_glossary)["label"] == "Kestrel"
+    assert vendor.calls == [], "the preview called out to a vendor"
+
+
+async def test_the_preview_does_not_replace_the_model_call(with_glossary, vendor) -> None:
+    """Whether a turn also deserves a recall card cannot be known without
+    asking, and recall is the more useful kind. The preview buys latency, not
+    tokens."""
+    vendor.cards(CARD)
+    with_glossary.transcript.append(JARGON_TURN)
+    await with_glossary.preview(JARGON_TURN[1])
+    await with_glossary.enrich()
+    assert vendor.calls_to("anthropic") == 1
+
+
+async def test_a_preview_the_model_confirms_is_not_retracted(with_glossary, vendor) -> None:
+    """Same topic id means the model corroborated it: one card, updated in
+    place, with the full TTL."""
+    vendor.cards({"id": "kestrel", "kind": "jargon", "label": "Kestrel",
+                  "detail": "Their gate; raised twice, likely a real constraint."})
+    with_glossary.transcript.append(JARGON_TURN)
+    await with_glossary.preview(JARGON_TURN[1])
+    await with_glossary.enrich()
+
+    assert not any(m.get("type") == "expire" for m in with_glossary.sent)
+    assert only_card(with_glossary)["detail"].startswith("Their gate")
+
+
+async def test_a_preview_the_model_contradicts_is_retracted(with_glossary, vendor) -> None:
+    """Left standing, the guess would sit beside the model's own card on a
+    different topic — the duplication the card lifecycle exists to prevent."""
+    vendor.cards({"id": "contract-testing", "kind": "jargon",
+                  "label": "Contract testing", "detail": "CDC between services."})
+    with_glossary.transcript.append(JARGON_TURN)
+    await with_glossary.preview(JARGON_TURN[1])
+    await with_glossary.enrich()
+
+    expires = [m for m in with_glossary.sent if m.get("type") == "expire"]
+    assert expires, "the unconfirmed preview was left standing"
+    assert expires[-1]["ids"] == ["kestrel"]
+
+
+async def test_a_quiet_turn_retracts_the_preview(with_glossary, vendor) -> None:
+    """The model read the same turn and had nothing to say. Its silence is the
+    better judgement — the preview was a keyword match."""
+    vendor.cards()                      # zero cards: the normal turn
+    with_glossary.transcript.append(JARGON_TURN)
+    await with_glossary.preview(JARGON_TURN[1])
+    await with_glossary.enrich()
+
+    expires = [m for m in with_glossary.sent if m.get("type") == "expire"]
+    assert expires and expires[-1]["ids"] == ["kestrel"]
+
+
+async def test_a_turn_the_glossary_does_not_know_paints_nothing(with_glossary) -> None:
+    quiet = "Tell me about a time you disagreed with a manager."
+    with_glossary.transcript.append(("interviewer", quiet))
+    await with_glossary.preview(quiet)
+    assert with_glossary.sent == []
+
+
+async def test_the_preview_can_be_turned_off(build_server, vendor, tmp_path) -> None:
+    """Off means the screen waits for the model every turn, which is the
+    behaviour before this existed."""
+    base = vendor.start()
+    path = tmp_path / "glossary.json"
+    path.write_text(json.dumps(GLOSSARY))
+    server = build_server(GLOSS_PROVIDER="anthropic", GLOSS_FALLBACKS="deepseek,local",
+                          GLOSS_KB=str(path), GLOSS_PREVIEW="",
+                          ANTHROPIC_BASE_URL=base, ANTHROPIC_API_URL=base,
+                          DEEPSEEK_API_BASE=base)
+    sent: list[dict] = []
+
+    async def capture(payload: dict) -> None:
+        sent.append(payload)
+
+    server.broadcast = capture
+    await server.preview(JARGON_TURN[1])
+    assert sent == []
+
+
+async def test_no_glossary_means_no_preview_and_no_crash(build_server, vendor, tmp_path) -> None:
+    base = vendor.start()
+    server = build_server(GLOSS_PROVIDER="anthropic", GLOSS_FALLBACKS="deepseek",
+                          GLOSS_KB=str(tmp_path / "absent.json"),
+                          ANTHROPIC_BASE_URL=base, ANTHROPIC_API_URL=base,
+                          DEEPSEEK_API_BASE=base)
+    sent: list[dict] = []
+
+    async def capture(payload: dict) -> None:
+        sent.append(payload)
+
+    server.broadcast = capture
+    await server.preview("anything at all")
+    assert sent == []

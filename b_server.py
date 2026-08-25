@@ -103,6 +103,12 @@ CARD_TTL_S = float(os.environ.get("GLOSS_CARD_TTL_S", "90"))
 # successful turn will not necessarily overwrite it, because zero cards is the
 # normal result and broadcasts nothing at all.
 ERROR_TTL_S = float(os.environ.get("GLOSS_ERROR_TTL_S", "20"))
+# A provisional card painted from the glossary the instant a turn ends, before
+# any model has been asked. It carries a short TTL so an unconfirmed guess
+# fades on its own even if the enrichment pass never returns at all.
+PREVIEW_TTL_S = float(os.environ.get("GLOSS_PREVIEW_TTL_S", "12"))
+# Set empty to turn the instant preview off and wait for the model every turn.
+PREVIEW = os.environ.get("GLOSS_PREVIEW", "1") not in ("", "0", "false")
 # The transcript is no longer windowed. A rolling window was the amnesia: a
 # term defined in minute three was gone by minute five, and a glossary that
 # cannot connect a thing said now to the thing that defined it earlier is not
@@ -516,9 +522,18 @@ if len(LINKS) > 1:
 # what a person needs to read when both vendors are down.
 _turn_failures: list[ProviderUnavailable] = []
 
+# Ids of cards painted from the glossary before the model answered. Held so the
+# ones the model does not confirm can be taken back down: a provisional card
+# left standing beside the model's own card on the same topic is the
+# duplication the card lifecycle exists to prevent.
+_provisional: set[str] = set()
+
 transcript: list[tuple[str, str]] = []
 displays: set[websockets.ServerConnection] = set()
 _inflight: asyncio.Task | None = None
+# Held because asyncio keeps only a weak reference to a running task: a
+# fire-and-forget preview can be garbage collected mid-send.
+_preview_task: asyncio.Task | None = None
 _logged_cache_stats = False
 # Which link answered last, so a change of provider mid-conversation is
 # reported once rather than every turn or not at all.
@@ -603,6 +618,33 @@ def build_turn_message(profile: providers.Profile):
     # never enters a cached prefix and never invalidates one.
     blocks.append({"type": "text", "text": ASK})
     return HumanMessage(content=blocks)
+
+
+async def preview(text: str) -> None:
+    """Paint what the glossary already knows, before asking anyone.
+
+    The chain answers in 1.1-1.8s. The glossary answers in microseconds, from a
+    dict that is already in memory. On a live call that gap is the difference
+    between reading a definition while the interviewer is still talking and
+    reading it after you have already had to respond.
+
+    **This does not replace the model call, and deliberately so.** Whether a
+    turn also deserves a *recall* card — the more useful kind, and the one only
+    a model can write — cannot be known without asking. So the glossary paints
+    first and the model supersedes it: same topic id, same slot, better text,
+    no flash. That is what the card lifecycle was built for.
+
+    It buys latency, not tokens. The model is asked either way.
+    """
+    if not PREVIEW or not len(GLOSSARY):
+        return
+    card = GLOSSARY.card(text)
+    if card is None:
+        return
+    _provisional.add(card["id"])
+    await broadcast(
+        {"type": "cards", "cards": [{**card, "ttl": PREVIEW_TTL_S}], "max": MAX_CARDS}
+    )
 
 
 async def enrich() -> None:
@@ -704,10 +746,22 @@ async def enrich() -> None:
 
     elapsed = time.monotonic() - started
     log.info("[cards +%4.1fs %s] %s", elapsed, answered, cards if cards else "(none)")
+    if not cards and _provisional:
+        # The model read the same turn and had nothing to say about it. The
+        # preview was a guess from a keyword match; the model's silence is the
+        # better judgement, so the guess comes down.
+        await broadcast({"type": "expire", "ids": sorted(_provisional)})
+        _provisional.clear()
     if cards:
         # TTL travels with each card and the cap travels with the batch, so the
         # display holds no policy of its own. A second screen opened halfway
         # through a call is then configured by the first message it receives.
+        # A preview the model did not corroborate comes down. Same id means it
+        # was confirmed and is simply updated in place, with the full TTL.
+        stale = _provisional - {c["id"] for c in cards}
+        _provisional.clear()
+        if stale:
+            await broadcast({"type": "expire", "ids": sorted(stale)})
         await broadcast(
             {
                 "type": "cards",
@@ -719,11 +773,14 @@ async def enrich() -> None:
 
 def on_turn_end(text: str) -> None:
     """Interviewer finished a turn — supersede any in-flight pass with this one."""
-    global _inflight
+    global _inflight, _preview_task
     if len(text) < MIN_CHARS:
         return  # "mm-hm", "right, yeah" — turn-taking, not a question
     if _inflight and not _inflight.done():
         _inflight.cancel()  # a card about the previous question is worse than none
+    # Painted first and awaited by nobody: a dict lookup and a websocket send,
+    # so the model call starts in the same tick.
+    _preview_task = asyncio.create_task(preview(text))
     _inflight = asyncio.create_task(enrich())
 
 
