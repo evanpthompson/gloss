@@ -80,8 +80,22 @@ class Glossary:
             if key and (key not in self._by_term
                         or len(entry.definition) > len(self._by_term[key].definition)):
                 self._by_term[key] = entry
-        # Longest first, so "east west traffic" is preferred over "traffic".
-        self._keys = sorted(self._by_term, key=lambda k: -len(k))
+
+        # Bucketed by first word, so a turn is matched against the handful of
+        # terms that could start at each of its words rather than against all
+        # of them. The first cut scanned every term for every turn: correct,
+        # and 680µs at 5,622 terms, but linear in the glossary — a corpus ten
+        # times the size would have put it in the same order as the model call
+        # it exists to beat.
+        self._by_first: dict[str, list[tuple[tuple[str, ...], Entry]]] = {}
+        for key, entry in self._by_term.items():
+            words = tuple(key.split())
+            self._by_first.setdefault(words[0], []).append((words, entry))
+        # Longest first within a bucket, so the first match at a position is
+        # the longest one available there. Ties broken by length then
+        # alphabetically, so the answer never depends on dict ordering.
+        for bucket in self._by_first.values():
+            bucket.sort(key=lambda pair: (-len(pair[0]), -len(" ".join(pair[0])), pair[0]))
 
     def __len__(self) -> int:
         return len(self._by_term)
@@ -108,12 +122,28 @@ class Glossary:
         a sentence about *context* engineering — a confident answer about a
         different term, which is the worst thing this can do on a screen
         somebody trusts. A term either appears or it does not.
+
+        "Longest" counts **words** before characters. A longer phrase is the
+        more specific reading: "east-west traffic" is a better answer to a
+        question about east-west traffic than "traffic" is, even when some
+        unrelated single word happens to be spelled with more letters.
+
+        Cost is proportional to the length of the turn, not the size of the
+        glossary.
         """
-        haystack = f" {normalise(text)} "
-        for key in self._keys:
-            if f" {key} " in haystack:
-                return self._by_term[key]
-        return None
+        words = normalise(text).split()
+        best: Entry | None = None
+        best_words = 0
+        for position, word in enumerate(words):
+            remaining = len(words) - position
+            for term_words, entry in self._by_first.get(word, ()):
+                if len(term_words) > remaining:
+                    continue        # bucket is longest-first; shorter ones follow
+                if tuple(words[position : position + len(term_words)]) == term_words:
+                    if len(term_words) > best_words:
+                        best, best_words = entry, len(term_words)
+                    break           # longest available at this position
+        return best
 
     def card(self, text: str) -> dict | None:
         """A jargon card for `text`, or None when nothing is known.

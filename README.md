@@ -173,7 +173,7 @@ its vendors alone.
 
 ```bash
 uv sync                       # dev dependencies included
-uv run pytest                 # 165 tests, ~25s
+uv run pytest                 # 179 tests, ~25s
 uv run ruff check .
 ```
 
@@ -197,6 +197,7 @@ pass.
 | `test_providers.py` | unit | the provider allow-list and its refusals |
 | `test_chain.py` | integration | the fallback chain through the real SDKs |
 | `test_kb.py` | unit | the local glossary — mostly what it refuses to answer |
+| `test_eviction.py` | unit | the transcript ceiling, and what crossing it costs |
 | `test_display.py` | browser | card lifecycle in `display.html`, in real Chromium |
 
 The end-to-end audio pipe test lives in the separate `gloss-e2e` project; it

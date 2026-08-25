@@ -561,9 +561,16 @@ def evict_if_needed() -> None:
     built to remember *and* invalidates the cached prefix from that point on,
     so the next turn is slower and dearer for a reason nothing else would show.
     """
-    while transcript and providers.estimate_tokens(
-        "\n".join(t for _, t in transcript)
-    ) > MAX_TRANSCRIPT_TOKENS:
+    def size() -> int:
+        return providers.estimate_tokens("\n".join(t for _, t in transcript))
+
+    # `len(transcript) > 1`, not `transcript`. The newest turn is the question
+    # the cards are about, and the earlier form would evict it too: a single
+    # turn larger than the whole ceiling emptied the transcript, and the model
+    # was then asked for "cards for the final [interviewer] turn" with no turn
+    # in the prompt at all. That produces nothing, costs a call, and says
+    # nothing about why.
+    while len(transcript) > 1 and size() > MAX_TRANSCRIPT_TOKENS:
         who, text = transcript.pop(0)
         log.warning(
             "Transcript over %d tokens — dropped oldest turn [%s] %.40s… "
@@ -571,6 +578,19 @@ def evict_if_needed() -> None:
             MAX_TRANSCRIPT_TOKENS,
             who,
             text,
+        )
+
+    # Degrade by carrying fewer turns, never by carrying none. One turn over
+    # budget is kept and reported: the pass is worth making on an oversized
+    # turn, and the operator needs to know the ceiling is not doing what they
+    # set it to do.
+    if transcript and size() > MAX_TRANSCRIPT_TOKENS:
+        log.warning(
+            "A single turn is ~%d tokens, over the %d-token ceiling on its own "
+            "— keeping it, because a pass with no turn in it can only produce "
+            "nothing. Raise GLOSS_MAX_TRANSCRIPT_TOKENS if this recurs.",
+            size(),
+            MAX_TRANSCRIPT_TOKENS,
         )
 
 

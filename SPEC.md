@@ -361,9 +361,27 @@ turn, and the error card names the first one with a recognisable reason.
 
 #### The instant preview — latency, not tokens
 
-The chain answers in 1.1–1.8s. The glossary answers in **200µs on a hit and
-680µs on a miss** (a linear scan of 5,622 terms). So when a turn ends, the
-glossary paints immediately and the model supersedes it when it arrives.
+The chain answers in 1.1–1.8s. The glossary answers in **6µs on a hit and 13µs
+on a miss**. So when a turn ends, the glossary paints immediately and the model
+supersedes it when it arrives.
+
+Terms are bucketed by first word, so a turn is matched against the handful that
+could start at each of its words rather than against all of them. The first cut
+scanned every term — correct, and 200µs/680µs at 5,622 terms, but linear in the
+glossary. Measured across a 10× corpus:
+
+| glossary | hit | miss |
+|---|---|---|
+| 5,622 terms | 6.1µs | 12.8µs |
+| 55,622 terms | 6.6µs | 13.7µs |
+
+Cost tracks the length of the turn, not the size of the corpus, which is what
+makes growing the knowledge base free at query time.
+
+"Longest match" counts **words** before characters: a longer phrase is the more
+specific reading, so "api gateway" beats "internationalization" even though the
+single word is longer. Ties break by length then alphabetically, so the card
+shown never depends on dict ordering.
 
 Measured live on the real path, one turn:
 
@@ -692,6 +710,27 @@ prefix caching everywhere, so `SYSTEM_PROMPT` is built once at startup and the
 volatile transcript always goes last, whichever provider is configured.
 
 **Noise control:**
+### The transcript ceiling
+
+Every turn is sent, every turn — a glossary that cannot connect a thing said now
+to the thing that defined it earlier is not doing its job. Bounded rather than
+unbounded, though: `GLOSS_MAX_TRANSCRIPT_TOKENS` (default 100,000, half the
+window) is roughly 400 turns of speech, far past any real conversation but not
+"cannot".
+
+On overflow the oldest turns are dropped and each drop is logged at **warning**
+level, because it costs twice: it loses conversation the tool exists to
+remember, and it changes the front of the prompt, which invalidates every cached
+read after that point. The cost profile changes for a reason nothing else would
+show.
+
+**The newest turn is never evicted.** The earlier form dropped turns while the
+transcript was over budget at all, so a single turn larger than the whole
+ceiling emptied it — and the model was then asked for "cards for the final
+[interviewer] turn" with no turn in the prompt. That call costs money and can
+only return nothing. An oversized turn is now kept and reported instead: degrade
+by carrying fewer turns, never by carrying none.
+
 ### Card lifecycle
 
 Cards persist while their topic is live, rather than being replaced each turn.

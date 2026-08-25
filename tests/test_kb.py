@@ -121,3 +121,67 @@ def test_an_empty_term_cannot_swallow_every_turn(tmp_path) -> None:
     """A blank key would match every string and answer every question."""
     g = Glossary([Entry(term="  ", definition="d")])
     assert g.card("literally anything") is None
+
+
+# --- lookup must not scale with the glossary --------------------------------
+
+
+def _glossary_of(n: int, *, extra: list[Entry] | None = None) -> Glossary:
+    return Glossary((extra or []) + [
+        Entry(term=f"synthetic term {i} alpha", definition="d") for i in range(n)
+    ])
+
+
+def test_a_term_is_still_found_among_many() -> None:
+    """Correctness must not depend on the glossary being small."""
+    g = _glossary_of(20_000, extra=[TRAFFIC])
+    card = g.card("most of our east west traffic is internal")
+    assert card is not None
+    assert card["label"] == "east-west traffic"
+
+
+def test_lookup_cost_does_not_follow_glossary_size() -> None:
+    """The first cut compared a turn against every term, which was 680us at
+    5,622 terms and would have grown with the corpus until it was in the same
+    order as the model call it exists to beat.
+
+    Measured as a ratio between a small and a 50x larger glossary rather than
+    against an absolute bound, so the test calibrates to whatever machine runs
+    it. A linear implementation would show roughly 50x here.
+    """
+    import time
+
+    turn = "Tell me about a time you disagreed with a manager about an approach."
+    small, large = _glossary_of(400), _glossary_of(20_000)
+
+    def cost(g) -> float:
+        for _ in range(200):        # warm the interpreter, not the data
+            g.lookup(turn)
+        start = time.perf_counter()
+        for _ in range(2_000):
+            g.lookup(turn)
+        return time.perf_counter() - start
+
+    ratio = cost(large) / max(cost(small), 1e-9)
+    assert ratio < 5, f"lookup cost grew {ratio:.1f}x for 50x the terms — is it scanning them all?"
+
+
+def test_a_longer_phrase_beats_a_longer_word() -> None:
+    """"Longest" counts words before characters: a longer phrase is the more
+    specific reading, even when a single unrelated word has more letters."""
+    g = Glossary([
+        Entry(term="internationalization", definition="i18n."),
+        Entry(term="api gateway", definition="An entry point for service APIs."),
+    ])
+    card = g.card("we put an api gateway in front of internationalization")
+    assert card["label"] == "api gateway"
+
+
+def test_ties_do_not_depend_on_insertion_order() -> None:
+    """Two terms of equal length matching one turn must resolve the same way
+    whichever order they were loaded in — otherwise the card shown depends on
+    dict ordering."""
+    a = Entry(term="blue green", definition="Two identical environments.")
+    b = Entry(term="red black", definition="A balanced tree.")
+    turn = "we run blue green and red black side by side"
+    assert Glossary([a, b]).card(turn)["label"] == Glossary([b, a]).card(turn)["label"]
