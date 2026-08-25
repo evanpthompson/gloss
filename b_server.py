@@ -31,6 +31,7 @@ from deepgram import AsyncDeepgramClient
 from langchain.chat_models import init_chat_model
 
 import providers
+from cards import card_schema, valid_cards
 from langchain_core.messages import HumanMessage, SystemMessage
 from deepgram.core.events import EventType
 from deepgram.environment import DeepgramClientEnvironment
@@ -131,31 +132,10 @@ The notes below are the person's own preparation, written before the call.
 --- NOTES ---
 """
 
-CARD_SCHEMA = {
-    # `title` is not decoration. Gemini tolerates a schema without one, but
-    # langchain-anthropic routes structured output through tool-calling and a
-    # tool must have a name — without this it raises "Unsupported function" at
-    # import, before a single call is made. Naming it as a verb also tells the
-    # model what the schema is for, which is the one place a provider sees it.
-    "title": "emit_cards",
-    "type": "object",
-    "properties": {
-        "cards": {
-            "type": "array",
-            "maxItems": MAX_CARDS,
-            "items": {
-                "type": "object",
-                "properties": {
-                    "kind": {"type": "string", "enum": ["recall", "jargon"]},
-                    "label": {"type": "string"},
-                    "detail": {"type": "string"},
-                },
-                "required": ["kind", "label", "detail"],
-            },
-        }
-    },
-    "required": ["cards"],
-}
+# Derived from the pydantic model in cards.py rather than written out here.
+# The same model validates what comes back, so the contract cannot drift
+# between what is asked for and what is accepted.
+CARD_SCHEMA = card_schema(MAX_CARDS)
 
 
 def load_prep_pack(directory: Path) -> str:
@@ -314,19 +294,15 @@ async def enrich() -> None:
         # the task and leaves the display showing a normal quiet turn.
         if result.get("parsing_error"):
             raise ValueError(f"schema mismatch: {result['parsing_error']}")
+        # Validated per card, not per batch. `required` in a schema is advice
+        # to a model rather than a constraint on it — asked for zero cards,
+        # Gemini 3.6 returns [{}] — and zero cards is the correct answer for
+        # most turns. Failing the whole batch would put "Enrichment is down"
+        # on screen during the most ordinary case there is. See cards.py.
         raw_cards = (result.get("parsed") or {}).get("cards", [])
-        # `required` in the schema is not actually enforced: asked for zero
-        # cards, Gemini 3.6 returns [{}] rather than []. An empty object would
-        # render as three `undefined`s on the display, so drop anything that
-        # isn't a complete card. Zero cards is the normal case here, which is
-        # exactly why a malformed one must not survive.
-        cards = [
-            c
-            for c in raw_cards
-            if isinstance(c, dict) and all(c.get(k) for k in ("kind", "label", "detail"))
-        ][:MAX_CARDS]
-        if len(cards) != len(raw_cards):
-            log.debug("Dropped %d malformed card(s)", len(raw_cards) - len(cards))
+        cards, dropped = valid_cards(raw_cards, MAX_CARDS)
+        if dropped:
+            log.debug("Dropped %d malformed card(s)", dropped)
     except asyncio.CancelledError:
         raise  # superseded by a newer turn — expected, not an error
     except Exception as exc:

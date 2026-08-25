@@ -24,14 +24,21 @@ rather than "no minimum" — an unrun check is not a pass.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from pydantic import BaseModel, ConfigDict, Field
 
 
-@dataclass(frozen=True)
-class Profile:
-    """Everything about one provider that has to stay in lock step."""
+class Profile(BaseModel):
+    """Everything about one provider that has to stay in lock step.
 
-    model: str
+    Validated at import, so a malformed row is a refusal to start rather than
+    an attribute that reads wrong six functions later. `frozen` because a row
+    describes a vendor's published behaviour; code that wants different
+    behaviour wants a different row.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    model: str = Field(min_length=1)
     """Pinned model id. A version, not a family alias — `claude-haiku-4-5`
     caches, prices and behaves differently from any other Claude model, and the
     numbers in this row describe *this* id only."""
@@ -45,7 +52,7 @@ class Profile:
     """Environment variables that can supply this provider's credential. Any
     one is enough. Empty means the provider needs no key (local inference)."""
 
-    key_url: str
+    key_url: str = Field(min_length=1)
     """Where a human goes to get that credential. Named here so the startup
     error can point at it instead of at whichever provider was hardcoded."""
 
@@ -54,7 +61,7 @@ class Profile:
     `cache_control` block. True on Anthropic. Everything else here caches
     implicitly on a prefix match and rejects or ignores the marker."""
 
-    cache_min_tokens: int | None
+    cache_min_tokens: int | None = Field(ge=0)
     """Prefix size below which this provider silently stops caching. `None`
     means unverified — treat it as "cannot check", never as zero."""
 
@@ -85,7 +92,15 @@ PROFILES: dict[str, Profile] = {
         key_env=("GEMINI_API_KEY", "GOOGLE_API_KEY"),
         key_url="https://aistudio.google.com/apikey",
         cache_breakpoint=False,
-        cache_min_tokens=4096,  # gemini-3.x Flash; 2.5 Flash was 2048, closed to new users
+        # 4096 is the documented figure for gemini-3.x Flash (2.5 Flash was
+        # 2048, closed to new users). MEASURED 2026-08-24: a 5168-token prefix,
+        # byte-identical across four consecutive calls, reported cache_read=0
+        # every time — LangChain surfaces the field, so this is Gemini not
+        # caching rather than the counter not being plumbed. Either the floor is
+        # higher than documented or implicit caching here is best-effort. The
+        # number is left as documented rather than replaced with a guess; treat
+        # it as unconfirmed until a run shows cache_read climbing.
+        cache_min_tokens=4096,
         note="Phase 2 default. Free tier is 20 requests/day, per model, per project.",
     ),
     "deepseek": Profile(
