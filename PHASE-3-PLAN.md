@@ -290,9 +290,22 @@ The one that pays for everything else.
    this design has to catch.
 5. Re-measure latency and record it in `SPEC.md` next to Gemini's numbers.
 
-**Done when:** a smoke run shows `cache_read` climbing turn over turn, and the
-measured p50 is written down. A run where `cache_read` stays 0 is a **failed**
-session even if the cards are correct — that is the whole feature.
+**Done when:** a smoke run shows `cache_read` non-zero from turn 2 and steady
+at the prefix size, and the measured latency is written down. A run where
+`cache_read` stays 0 is a **failed** session even if the cards are correct —
+that is the whole feature.
+
+*Criterion corrected 2026-08-24, having first been written as "`cache_read`
+climbing turn over turn". That is S2's shape, not S1's: with a breakpoint on
+the system prefix alone, the prefix is what gets read and the figure is
+flat by construction. It only climbs once the newest-turn breakpoint lands and
+the conversation itself starts caching. Written down because a criterion that
+describes the next session's behaviour would have failed a correct run.*
+
+**Result: PASSED 2026-08-24.** `cache_read=5933` from turn 2 onward across five
+turns; `SPEC.md` carries the table. Latency measured at 2.5–3.3s, **outside**
+the 1–2s budget — recorded rather than waved through, and the lever (Haiku
+emits 158–222 output tokens against Gemini's 46–140) is identified but untried.
 
 ### S2 — Full conversation
 

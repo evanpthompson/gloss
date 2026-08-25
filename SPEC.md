@@ -259,26 +259,37 @@ seconds.
 
 Nothing below the config block in `b_server.py` knows which vendor is
 answering. The model is built through LangChain's `init_chat_model`, and the
-card schema through `.with_structured_output()`, so switching providers is
-two environment variables and a `uv add` of that provider's package:
+card schema through `.with_structured_output()`.
+
+Which provider, which model, the kwargs that model takes, whether it needs its
+cache prefix marked explicitly, and the prefix size below which it stops
+caching are **one row in `providers.py`**, not five settings. They were five
+settings until 2026-08-24, and they drifted: `GLOSS_PROVIDER=anthropic` with a
+stale `GLOSS_MODEL_KWARGS` still holding Gemini's `thinking_level` produced a
+400 from a vendor that has never heard of that parameter. Selecting a provider
+now selects the whole row.
 
 ```
-GLOSS_PROVIDER=google_genai   GLOSS_MODEL=gemini-2.5-flash    # default
-GLOSS_PROVIDER=anthropic      GLOSS_MODEL=claude-haiku-4-5
-GLOSS_PROVIDER=bedrock        GLOSS_MODEL=anthropic.claude-...
-GLOSS_PROVIDER=ollama         GLOSS_MODEL=llama3.1            # nothing leaves the machine
+GLOSS_PROVIDER=anthropic      # DEFAULT — claude-haiku-4-5, cache breakpoint, floor 4096
+GLOSS_PROVIDER=deepseek       # deepseek-v4-flash, implicit caching, floor unverified
+GLOSS_PROVIDER=ollama         # llama3.2, nothing leaves the machine
+GLOSS_PROVIDER=fake           # canned cards, mocked E2E suite only
+GLOSS_PROVIDER=google_genai   # no longer a target; kept working, unmaintained
 ```
 
-**Bedrock is an alternative to Gemini, not a layer over it.** `unravel` used
-Bedrock, and it remains a good option for Claude/Llama/Mistral behind one AWS
-bill — but Google models are not in its catalog, so Bedrock cannot reach
-Gemini. Picking Bedrock as "the abstraction" would have quietly ruled out the
-default model above. LangChain sits a level higher and covers both.
+The list is an **allow-list**: an unnamed provider is refused at startup rather
+than attempted, because "unrecognised" and "unsupported" are the same thing
+from a live conversation's point of view and the failure would otherwise land
+mid-call. Overriding the pinned model is allowed but must pin its kwargs too —
+an unpinned kwargs override follows you onto the next provider and fails there.
 
-Provider-specific knobs stay out of the code and live in `GLOSS_MODEL_KWARGS`
-as JSON. For the default model this is load-bearing, not decorative.
+**Gemini and Bedrock are no longer targets.** Bedrock's catalog has no Google
+models, which mattered while Gemini was the default and does not now. Gemini
+itself is out as of 2026-08-24 in favour of Anthropic primary and DeepSeek
+fallback; its row stays working but unmaintained, and its recorded cache floor
+is contradicted by measurement (see below).
 
-**Measured 2026-08-23, gemini-3.6-flash, example pack, two turns:**
+#### Measured 2026-08-23, gemini-3.6-flash, example pack, two turns
 
 | `thinking_level` | latency | verdict |
 |---|---|---|
@@ -286,9 +297,43 @@ as JSON. For the default model this is load-bearing, not decorative.
 | `"low"` | 15.6s, 3.2s | far over budget |
 | `"minimal"` | 1.7s, 1.3s | **inside the 1–2s budget** |
 
-So `GLOSS_MODEL_KWARGS={"thinking_level": "minimal"}` ships uncommented in
-`.env.example`. Note that `thinking_budget` — the 2.5-era parameter — is
-rejected outright with a 400 on 3.x.
+`thinking_budget` — the 2.5-era parameter — is rejected outright with a 400 on
+3.x. These numbers are retained as history; the provider is no longer a target.
+
+#### Measured 2026-08-24, claude-haiku-4-5, cachetest pack (~5,110 tokens), five turns
+
+**Caching is confirmed working here, for the first time in this project.**
+
+| turn | input | `cache_read` | latency |
+|---|---|---|---|
+| 1 | 6,387 | 0 | 3.35s |
+| 2 | 6,408 | 5,933 | 2.75s |
+| 3 | 6,424 | 5,933 | 2.59s |
+| 4 | 6,442 | 5,933 | 2.55s |
+| 5 | 6,462 | 5,933 | 2.87s |
+
+Turn 1 writes the prefix; every turn after reads 5,933 tokens at 0.1x input
+price. `cache_read` is **flat rather than climbing**, which is correct at this
+stage: only the system prefix carries a breakpoint, so the growing transcript
+rides along uncached — visible as `input` creeping while `cache_read` does not.
+It starts climbing when the newest-turn breakpoint lands.
+
+**Latency is 2.5–3.3s, outside the 1–2s budget.** Haiku emits 158–222 output
+tokens per turn against Gemini's 46–140, and latency scales with output. The
+cards are markedly better — specific, and quoting real figures from the pack —
+so this is a genuine quality/latency trade rather than a regression, but the
+budget is missed and shortening the cards is the obvious lever. Not yet tried.
+
+One counter does not work: `cache_write` reads 0 on every turn including the
+first, so LangChain is not surfacing Anthropic's cache-creation field under
+`input_token_details.cache_creation` — plausibly because the `1h` TTL reports
+under a different key. `cache_read` is the counter that matters and it is
+correct; the write counter is cosmetic and unfixed.
+
+For contrast, on gemini-3.6-flash a 5,168-token byte-identical prefix reported
+`cache_read=0` across four consecutive calls despite a documented 4,096 floor.
+LangChain surfaces the field there too, so that was Gemini not caching rather
+than a counter not plumbed.
 
 The one thing that does *not* abstract away is the prompt: prefix caching is
 prefix caching everywhere, so `SYSTEM_PROMPT` is built once at startup and the
