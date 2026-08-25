@@ -29,7 +29,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from providers import PROFILES, estimate_tokens  # noqa: E402  (needs the path insert above)
+from providers import PROFILES, estimate_tokens
 
 # The cache floors used to be a second copy of the numbers in providers.py,
 # which meant this gate and the server could disagree about whether a pack was

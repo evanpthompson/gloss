@@ -271,7 +271,7 @@ now selects the whole row.
 
 ```
 GLOSS_PROVIDER=anthropic      # DEFAULT — claude-haiku-4-5, cache breakpoint, floor 4096
-GLOSS_PROVIDER=deepseek       # deepseek-v4-flash, implicit caching, floor unverified
+GLOSS_PROVIDER=deepseek       # deepseek-v4-flash, implicit caching, floor 128 (measured)
 GLOSS_PROVIDER=ollama         # llama3.2, nothing leaves the machine
 GLOSS_PROVIDER=fake           # canned cards, mocked E2E suite only
 GLOSS_PROVIDER=google_genai   # no longer a target; kept working, unmaintained
@@ -282,6 +282,169 @@ than attempted, because "unrecognised" and "unsupported" are the same thing
 from a live conversation's point of view and the failure would otherwise land
 mid-call. Overriding the pinned model is allowed but must pin its kwargs too —
 an unpinned kwargs override follows you onto the next provider and fails there.
+
+#### Priming the recogniser — `keyterms.py`
+
+Nova-3 accepts `keyterm` prompting: domain vocabulary supplied at connect time,
+which it then recognises far more reliably. gloss already had the ideal corpus
+and was not using it — **the prep pack is by definition the vocabulary this
+conversation will contain.**
+
+This sits upstream of everything else, which is why it earns its place. Every
+later stage reads the transcript: a jargon card fires on a term the recogniser
+heard, and a recall card matches notes against words the recogniser produced. A
+term rendered wrong is a term no prompt and no retrieval can recover, and the
+failure is silent — the transcript still reads plausibly, the match simply never
+happens.
+
+#### Measured 2026-08-25, Nova-3, identical audio, primed vs unprimed
+
+Synthesised speech containing six terms from the `cachetest` pack, streamed
+twice. Same bytes, same model, one variable.
+
+| term | unprimed | primed |
+|---|---|---|
+| `A2DP` | `a two d p` | **`A2DP`** |
+| `WASAPI` | `Wasapi` | **`WASAPI`** |
+| `parakeet` | `Parakeet` | `parakeet` |
+| `HFP` | `HFP` | `HFP` |
+| `PCM` | `PCM` | `PCM` |
+| `GRIFFON` | `Griffin` | `Griffin` |
+| **recovered** | **4 / 6** | **5 / 6** |
+
+`A2DP` is the result that matters: unprimed it came back as three separate
+words, which no downstream matcher could recover under any amount of care. The
+casing corrections matter for the same reason, since retrieval matches exactly.
+
+`GRIFFON` → `Griffin` failed **both** times. Priming does not beat a homophone.
+That is a real limit of this technique, not a tuning problem, and anything built
+on top of the transcript has to assume some terms arrive wrong.
+
+**What counts as a term is not what counts as a heading.** Prep packs are prose.
+In this repo's own packs `**bold**` emphasises whole sentences, so bold is a
+noisy source while backticks and acronyms are nearly pure signal. Sources are
+ranked rather than pooled, and three classes are excluded outright because they
+cost budget without being sayable:
+
+* **Code fragments** — `deque(maxlen=6)`, `b_server.py:154`, commit hashes.
+  Backticked spans are also stripped before the later passes run, or the acronym
+  scan mines `PLAN` out of a file path.
+* **Sentence-initial capitals** — position, not a word list, is the primary
+  test: a word capitalised *mid-sentence* is a name, one opening a heading or
+  sentence is not. A colon is deliberately not a boundary, because
+  "Company: Example Corp" is exactly the shape prep packs use for names.
+* **Section titles** — "Something that went badly" is not vocabulary. A heading
+  qualifies only if every word reads as part of a name.
+
+Nova-3 caps keyterms at 500 tokens per request and errors above that, so the
+list fills in rank order to a conservative default of 400 and the overflow is
+logged rather than dropped quietly.
+
+#### The fallback chain
+
+One vendor is a single point of failure for a conversation that is happening
+right now and cannot be rescheduled. `GLOSS_FALLBACKS` (default `deepseek`)
+names the vendors tried behind `GLOSS_PROVIDER`, in order:
+
+```
+anthropic:claude-haiku-4-5  →  deepseek:deepseek-v4-flash
+```
+
+Fallbacks take their `providers.py` row verbatim; `GLOSS_MODEL` and
+`GLOSS_MODEL_KWARGS` are scoped to the provider you selected and are **not**
+carried across — a kwarg that follows you onto another vendor is the exact drift
+that row exists to stop, and a chain is the easiest place for it to happen
+unnoticed. Set `GLOSS_FALLBACKS=` empty to run deliberately on one provider.
+
+Caches are model-scoped, so the fallback link starts cold. That is fine for an
+outage and useless as a cost strategy: **this is outage resilience, not
+quota-dodging.**
+
+**Every link is preflighted with a live call at startup, and any link that fails
+refuses the whole boot.** The preflight is a real HTTPS round trip carrying the
+real card schema — not a check that a key is present and shaped right. That
+weaker check exists too (`providers.missing_key`, which only asks whether the
+variable is non-empty) and runs first, but it cannot tell a funded key from a
+revoked one. Only a call can. An unproven fallback is not a fallback — it is a
+second failure waiting for the worst possible moment, and it would be discovered
+during the outage it exists for. A link whose credential is simply unset refuses
+even earlier, before any call. During a genuine vendor outage the escape is
+explicit: point `GLOSS_PROVIDER` at a link that answers and set
+`GLOSS_FALLBACKS=` empty.
+
+#### What a failure means — `failures.py`
+
+**A status code is a lossy key.** The same number means different things on
+different vendors, and worse, different things on the same vendor. These were
+read from the vendor docs on 2026-08-25:
+
+| condition | Anthropic | DeepSeek | Gemini |
+|---|---|---|---|
+| revoked / invalid key | 401 `authentication_error` | 401 | 401 `authentication` |
+| balance empty | 402 `billing_error` | 402 | — |
+| spend limit you set | **400 `invalid_request_error`** | — | — |
+| tier spend cap | **429, no `retry-after`** | — | — |
+| daily quota exhausted | — | — | **429 `quota_exceeded`** |
+| ordinary rate limit | 429 `rate_limit_error` | 429 | 429 `rate_limit_exceeded` |
+| overloaded | 529 `overloaded_error` | 503 | 503 `service_unavailable` |
+| server error | 500 `api_error` | 500 | 500 `api_error` |
+| timeout | 504 `timeout_error` | — | 504 `deadline_exceeded` |
+| malformed request | 400 `invalid_request_error` | 400 / 422 | 400 `invalid_request` |
+| unknown model | 404 `not_found_error` | — | 404 `model_not_found` |
+
+Two collisions do real damage if ignored:
+
+* **Anthropic 400 `invalid_request_error` is either our bug or a spend limit.**
+  Same status, same type string. Only the message separates them, so this is the
+  one place a message substring is load-bearing. It fails safe: if the wording
+  changes the match stops firing and the failure classifies as a bad request,
+  which surfaces an error card rather than hiding anything.
+* **429 is either a rate limit that clears in seconds or a spend cap that never
+  clears.** Anthropic documents the tell — the spend-cap 429 carries no
+  `retry-after` header.
+
+So failures are classified into **reasons**, and two independent decisions hang
+off the reason:
+
+| reason | fails over | retires the link | typical cause |
+|---|---|---|---|
+| `unreachable` | yes | no | DNS, refused connection |
+| `timeout` | yes | no | no answer inside the deadline |
+| `rate-limited` | yes | no | too many requests; clears itself |
+| `overloaded` | yes | no | vendor 5xx / 529; clears itself |
+| `exhausted` | yes | **yes** | dead balance, spend limit, daily cap |
+| `credential` | yes | **yes** | revoked, expired, no permission |
+| `bad-request` | **no** | no | our bug — malformed, wrong model |
+| `unknown` | **no** | no | unrecognised |
+
+**Failing over** is an allow-list: an unrecognised failure stays put and reaches
+the screen, because failing over on the unknown case would let a second vendor
+bury a real bug behind a card that looks fine.
+
+**Retiring** is the payoff for knowing *why*. A revoked key and a dead balance do
+not fix themselves mid-conversation, so that link is skipped for the rest of the
+session instead of costing a wasted round trip on every turn. Transient reasons
+never retire a link — demoting the primary for an hour over a two-second rate
+limit would be worse than the blip.
+
+Credential failures are the entry worth arguing about, because a 401 is normally
+a configuration bug that should fail loudly. What makes it safe here is the
+preflight: a key that is missing, wrong or unfunded cannot get past startup, so
+a 401 arriving at turn 20 is a key revoked or a balance hit zero *mid-call*,
+which is outage-shaped. **The preflight is load-bearing for this decision — if
+it is ever removed, `credential` and `exhausted` must come out of the failover
+set with it.**
+
+The error card names the reason rather than the exception class, because someone
+glancing at a second screen mid-conversation can act on "Provider out of credit"
+and cannot act on "APIStatusError".
+
+**Which link answered is logged on every turn**, and a change of vendor is
+warned about once. LangChain's `with_fallbacks()` swallows the primary's
+exception and does not report the winner, so each link stamps its own name onto
+its result. Without that, a chain that has silently degraded for an entire
+conversation is invisible: the cards keep arriving and only the bill and the
+cache counters change.
 
 **Gemini and Bedrock are no longer targets.** Bedrock's catalog has no Google
 models, which mattered while Gemini was the default and does not now. Gemini
@@ -368,6 +531,65 @@ For contrast, on gemini-3.6-flash a 5,168-token byte-identical prefix reported
 `cache_read=0` across four consecutive calls despite a documented 4,096 floor.
 LangChain surfaces the field there too, so that was Gemini not caching rather
 than a counter not plumbed.
+
+#### Measured 2026-08-25, deepseek-v4-flash, cachetest pack, seven turns
+
+The fallback link, on the same pack and the same conversation. DeepSeek takes no
+`cache_control` marker, so the whole prompt is one string and caching is
+implicit:
+
+| turn | input | `cache_read` | miss | latency |
+|---|---|---|---|---|
+| 1 | 5,456 | 0 | 5,456 | 1.2s |
+| 3 | 5,504 | 5,376 | 128 | 1.7s |
+| 5 | 5,533 | 5,376 | 157 | 1.1s |
+| 7 | 5,570 | **5,504** | 66 | 1.8s |
+
+`cache_read` climbs 5,376 → 5,504, so the transcript caches here too and not
+just the prep pack. Latency 1.1–1.8s, inside budget. A term introduced on turn 3
+was correctly recalled on turn 7 — the same long-range check S2 used on Haiku.
+
+**Its cache floor is 128 tokens, measured, because DeepSeek publishes none.**
+Their caching guide states only that it is "enabled by default for all users"
+and that a request must "fully match a cache prefix unit". Probing identical
+back-to-back prefixes:
+
+| prefix | second call `cache_read` |
+|---|---|
+| 32 | 0 |
+| 64 | 0 |
+| 128 | 128 |
+| 192 | 128 |
+| 256 | 256 |
+
+Hits round **down** to a 128-token boundary, so 128 is one cache unit and the
+smallest prefix that can produce a hit at all.
+
+#### deepseek-v4-flash thinks by default, and thinking mode breaks structured output
+
+Every call 400s with `Thinking mode does not support this tool_choice` —
+`with_structured_output` forces a `tool_choice`, and thinking mode rejects it.
+Thinking would also blow the latency budget, so it is off for two reasons.
+
+The switch is `extra_body={"thinking": {"type": "disabled"}}`. Two details cost
+real time and are worth not rediscovering:
+
+* **It has to go through `extra_body`.** LangChain routes an unrecognised kwarg
+  into `model_kwargs`, which the OpenAI SDK then passes as a *Python argument*
+  to `Completions.create()` and rejects with a `TypeError`. `extra_body` is the
+  SDK's sanctioned channel for vendor extensions and lands in the JSON body.
+* **This API accepts and silently ignores parameters it does not know.**
+  `enable_thinking=false` and `thinking_level="minimal"` both returned 200 with
+  thinking still on. `reasoning_effort="none"` also worked but is undocumented
+  (the documented values are `low`/`high`/`max`), and there is no way to prove
+  it is being read rather than ignored. The documented `thinking` parameter has
+  such a proof: setting it to `{"type": "enabled"}` still 400s on tool_choice,
+  so the value is demonstrably read. That negative control is the reason to
+  prefer it.
+
+gloss gets one guard here for free: `main()` preflights every link with a live
+call, so a silently-ignored disable surfaces as a refusal to start rather than
+as a dead conversation.
 
 The one thing that does *not* abstract away is the prompt: prefix caching is
 prefix caching everywhere, so `SYSTEM_PROMPT` is built once at startup and the

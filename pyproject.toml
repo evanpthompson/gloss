@@ -24,3 +24,32 @@ package = false
 # depends on websockets -- runs the current release. Revisit if gloss ever
 # adopts the Live API.
 override-dependencies = ["websockets>=17.0"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "pytest-timeout>=2.4.0",
+    "ruff>=0.16.4",
+]
+
+[tool.pytest.ini_options]
+# asyncio_mode=auto so a coroutine test needs no decorator. Most of the tests
+# that matter here are async, because everything gloss does on a turn is.
+asyncio_mode = "auto"
+testpaths = ["tests"]
+# Integration tests run b_server against a local fake vendor rather than a real
+# one, so the whole suite is offline: no keys, no network, no spend. That is
+# what lets it gate in CI, which is the only place gating counts.
+addopts = "-q"
+
+[tool.ruff.lint]
+# E402 (import not at top of file) is deliberately NOT selected. Two modules
+# import after a required side effect — b_server must call load_dotenv() before
+# importing deepgram, whose SDK reads DEEPGRAM_API_KEY as a default argument
+# value at import time, and tools/check_pack.py must extend sys.path before
+# importing providers. Both orderings are load-bearing and commented where they
+# happen; selecting the rule would mean scattering suppressions over correct
+# code. E501 is off because the prose comments in this codebase are the point.
+select = ["F", "I", "UP", "B", "RUF"]
+ignore = ["E501"]

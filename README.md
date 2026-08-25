@@ -150,6 +150,33 @@ invisible for the rest of the conversation.
 short an interviewer turn has to be before it counts as turn-taking rather than
 a question), `GLOSS_WINDOW_TURNS`.
 
+## Tests
+
+```bash
+uv sync                       # dev dependencies included
+uv run pytest                 # 109 tests, ~10s
+uv run ruff check .
+```
+
+**The whole suite is offline.** No API keys, no network, no spend — integration
+tests run `b_server` against a local fake vendor that speaks both wire formats
+(`tests/fake_vendor.py`). That is deliberate: a gate that needs a funded account
+is a gate that gets skipped the first time it is inconvenient, and this one runs
+in CI where merges actually happen.
+
+| file | layer | covers |
+|---|---|---|
+| `test_failures.py` | unit | every documented vendor error → its meaning |
+| `test_keyterms.py` | unit | what gets primed into Nova-3, and what must not |
+| `test_prompt_shape.py` | unit | the block structure prefix caching depends on |
+| `test_cards.py` | unit | the card contract, and what gets dropped |
+| `test_providers.py` | unit | the provider allow-list and its refusals |
+| `test_chain.py` | integration | the fallback chain through the real SDKs |
+
+The end-to-end audio pipe test lives in the separate `gloss-e2e` project; it
+needs two containers and a mocked Deepgram, and CI triggers it after this
+project's own tests pass.
+
 ## Next (deferred, not built yet)
 
 - Tier 2 post-call research export (Phase 3)

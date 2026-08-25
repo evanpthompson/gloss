@@ -349,6 +349,73 @@ re-merged; breakpoints on the last two; the constant ASK last of all.
 **Done when:** revoking the Anthropic key mid-run falls through and a card
 still lands. Test it by breaking it on purpose, not by reasoning about it.
 
+**Result: PASSED 2026-08-25.** DeepSeek was funded, and the first live call
+against it 400'd rather than 402'd: `deepseek-v4-flash` thinks by default and
+thinking mode rejects the forced `tool_choice` structured output depends on.
+Disabled with the documented `extra_body={"thinking": {"type": "disabled"}}` —
+see SPEC.md for why that one and not the `reasoning_effort="none"` that also
+appeared to work. It then answered correctly at 1.1–1.8s with `cache_read`
+climbing, and its cache floor came back **128 tokens, measured**, which closes
+open question 1 and takes `check_pack --provider deepseek` from `NOT RUN` to a
+real PASS.
+
+**Step 2 as written conflicted with the Done-when, and the Done-when won.**
+Scoping failover to "rate-limit, timeout, and connection errors only" excludes
+the 401 that revoking a key produces, so the two could not both hold. Credential
+failures (401/402/403) are in the failover set, and what licenses that is the
+preflight: `main()` proves *every* link with a live call before the conversation
+starts, so a key that is missing, wrong or unfunded refuses to boot. A 401
+arriving at turn 20 has already passed that gate — it is a key revoked or a
+balance hit zero mid-call, which is outage-shaped, not a typo. **If the preflight
+is ever removed, those three statuses must come out with it.** 400, 404 and 422
+stay out: a malformed request or a schema mismatch is our bug, and a second
+vendor quietly succeeding would bury it.
+
+Failover is decided by an **allow-list** rather than by handing vendor exception
+classes to `exceptions_to_handle`. An unrecognised failure therefore does *not*
+fail over, which is the direction that fails closed — and the classifier is
+testable with no network and no keys.
+
+**Amended 2026-08-25, after reading all three vendors' error docs.** A boolean
+"should this fail over" was the wrong shape, and a status-code allow-list was
+missing a case: Anthropic returns a **spend limit as a 400 `invalid_request_error`**
+— the same status *and* the same type string as a request this code built wrong
+— so the chain would not have failed over on the exact condition it exists for.
+Classification now produces a *reason* (`failures.py`), from the vendor's own
+error type where it is more specific than the code, from the status where it is
+not, and from the message only for the documented collisions. Two decisions hang
+off the reason instead of one: whether to fail over, and whether this link is
+worth trying again this session. A revoked key or a dead balance retires the link
+for the conversation; a rate limit never does. Full mapping in SPEC.md
+§ "What a failure means".
+
+Two things the plan did not anticipate:
+
+* **`with_fallbacks()` hands every link the same input**, but the two vendors
+  need different message shapes. So a link is not a model, it is
+  render-then-call: it ignores the input and builds its own messages from the
+  shared transcript when it runs. That is what keeps the two-shape branch inside
+  `system_message_for()` and `build_turn_message()` rather than in `enrich()`.
+* **LangChain never reports which link answered** — it swallows the primary's
+  exception and returns. Each link stamps `provider` onto its own result, so the
+  per-turn log names the vendor and a change of vendor is warned about once.
+
+**Broken on purpose, six cases, all as intended** (see the S3 result table in
+§ Sessions of SPEC.md for the numbers):
+
+| what was broken | expected | got |
+|---|---|---|
+| primary returns 401 | fall through, card lands | DeepSeek answered, card `Kestrel` |
+| primary returns 400 | do **not** fall through | error card, DeepSeek never called |
+| `should_failover`, 12 statuses/types | allow-list holds | 12/12 |
+| fallback key unset | refuse to start | refused, named the key |
+| unknown name in `GLOSS_FALLBACKS` | refuse to start | refused, listed known rows |
+| `GLOSS_FALLBACKS=` | single provider, no chain | one link |
+
+The 401/400 cases are real sockets and real SDK error objects — the Anthropic
+link was pointed at a local server returning that status, so only the *cause* of
+the failure was staged, not the failure.
+
 ### S4 — Card lifecycle
 
 1. Add `id` to `CARD_SCHEMA` (`b_server.py:116`); the model supplies a short
@@ -363,13 +430,104 @@ card that updates, not two that flash.
 
 ---
 
+### S5 — Local retrieval, as a tag-team and a floor (not started)
+
+A last link that answers from local data with no model behind it. It is the only
+link that survives both vendors being out, and on the turns it can answer it
+replaces a 1.1–1.8s round trip with roughly nothing.
+
+**The corpus already exists**: 32 books already converted to markdown under
+`~/files/automation/resources/project_books` (~3.0M words), plus 21 PDFs in
+`~/files/books`. BM25 over 3M words is milliseconds on this hardware and needs
+no GPU, no embeddings and no local model — the hardware constraint that ruled
+out local inference for STT does not apply to lexical retrieval.
+
+**The split, and why it is a correctness rule rather than a preference:**
+
+* **`recall` cards stay prep-pack only.** The instructions say "Never invent a
+  fact, a number, or an anecdote that is not written there". A recall card
+  sourced from a book would be a plausible lie on screen, mid-conversation.
+* **`jargon` cards are what the books can serve.** Defining a term needs world
+  knowledge the pack does not have, and that is exactly what 3M words of
+  engineering books hold.
+
+**Books never enter the prompt.** The retriever reads them and emits a card
+directly, or emits nothing. That deletes the failure mode above rather than
+mitigating it, and it is also the cheaper design — see below.
+
+#### The cost of the alternative, measured against real prices
+
+If instead the books were retrieved into the prompt for the model to read, the
+retrieved passages are **per-turn payload that caching cannot help**, because
+they differ every turn. Today's measured turn is 8,079 cached and **52 uncached**
+input tokens. Three 800-token passages is 2,400 uncached — **46x the uncached
+payload**. Modelled over a 20-turn call at Haiku 4.5 and DeepSeek V4-Flash list
+prices (read 2026-08-25):
+
+| scenario | $/call | vs today | context at turn 20 |
+|---|---|---|---|
+| today, no retrieval | $0.039 | — | 8,079 tok |
+| passages appended as history (cached) | $0.181 | **4.6x** | 56,079 tok |
+| passages after the last breakpoint (uncached) | $0.087 | 2.2x | 10,479 tok |
+| local retriever answers 40% of turns | $0.024 | 0.6x | 8,079 tok |
+| local retriever answers 60% of turns | $0.016 | 0.4x | 8,079 tok |
+
+**The middle row is the trap, and it is the one instinct picks.** Caching the
+retrieved passages is *worse* than not caching them. A 1h cache write costs 2x
+base input and caching only repays on reuse; a passage retrieved for turn N is
+never read again, so you pay the 2x write and then collect 0.1x reads forever on
+text nobody looks at. It also grows context to 56K tokens by turn 20 — seven
+times today's — which eats `GLOSS_MAX_TRANSCRIPT_TOKENS` and slows every turn.
+
+**So: if retrieved text is ever put in the prompt, it goes after the last
+breakpoint** — the same slot the constant `ASK` occupies, for the same reason.
+Anywhere earlier and it either invalidates the prefix or pays to cache something
+that will never be read twice.
+
+**The dollars are not the argument.** Nine cents against four on a 45-minute
+call is noise. The arguments are latency (a local hit is not a slow call, it is
+no call) and the correctness rule above.
+
+**PageIndex specifically is out.** It navigates its tree *using LLM calls* —
+several round trips per query. That multiplies both tokens and latency on a path
+budgeted at 1–2s, where the whole enrichment call currently takes 1.1–1.8s.
+Worth knowing about for offline work; wrong shape for a live conversation.
+
+1. Index `project_books` at build time, not call time — a prebuilt on-disk index
+   loaded at startup, so a cold call pays nothing.
+2. BM25 or TF-IDF. No embeddings; nothing to download, nothing to GPU.
+3. Hard-code the emitted card to `kind: "jargon"`. Enforced in code, not by
+   convention — `cards.py` already refuses an `error` kind from a model for the
+   same reason.
+4. A minimum score, below which it emits nothing. Fail closed: no card beats a
+   wrong card on a screen someone is glancing at.
+5. Check `~/files/automation/resources/KNOWLEDGE_INDEX.md` and the existing
+   Librarian MCP server first — some of this index may already exist.
+
+**Done when:** with both vendors unreachable, a jargon term from the books still
+produces a correct card; and a term the books do not cover produces nothing at
+all rather than a low-confidence guess.
+
+#### Recogniser priming — done 2026-08-25, outside the S-numbers
+
+Not in the original plan and worth recording: `keyterms.py` mines the prep pack
+for domain vocabulary and primes Nova-3 with it at connect time. Measured on
+identical synthesised audio, 4/6 terms recovered unprimed against 5/6 primed —
+notably `A2DP`, which unprimed came back as the three words "a two d p" and was
+unrecoverable by anything downstream. `GRIFFON` → `Griffin` failed both times:
+priming does not beat a homophone, and S5's retrieval has to assume some terms
+arrive wrong. Full numbers and the extraction rules are in SPEC.md.
+
 ## Open questions
 
-1. **Is DeepSeek's context caching automatic, and does it need any opt-in?**
-   Its pricing page bills cache hits and misses separately but does not state
-   how a hit is produced. Assumed implicit; **unverified**. S3 finds out, and
-   if it turns out to need explicit configuration the provider branch grows a
-   second shape rather than the design changing.
+1. ~~**Is DeepSeek's context caching automatic, and does it need any
+   opt-in?**~~ **ANSWERED 2026-08-25: automatic, no opt-in, floor 128 tokens.**
+   Their guide says caching is "enabled by default for all users" and that a
+   request must "fully match a cache prefix unit", but publishes no minimum, so
+   the floor was measured: 32 and 64 never cache, 128 does, and hits round down
+   to a 128-token boundary. Confirmed live on the real prompt — `cache_read`
+   climbed 5,376 → 5,504 as the conversation grew. No second prompt shape was
+   needed.
 2. **Does a five-minute gap actually happen in a real conversation?** The 1h
    TTL makes this moot at negligible cost, which is why it is the default here
    — but the answer determines whether it can ever be dropped back to 5m.

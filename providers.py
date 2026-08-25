@@ -108,17 +108,43 @@ PROFILES: dict[str, Profile] = {
     ),
     "deepseek": Profile(
         model="deepseek-v4-flash",
-        kwargs={},
+        # deepseek-v4-flash thinks by default, and thinking mode rejects the
+        # forced `tool_choice` that structured output depends on -- every call
+        # 400s with "Thinking mode does not support this tool_choice". Thinking
+        # would also blow the 1-2s budget on its own, so it is off here for two
+        # independent reasons.
+        #
+        # `extra_body` rather than a plain kwarg: LangChain routes unrecognised
+        # kwargs into `model_kwargs`, which the OpenAI SDK then passes as a
+        # Python argument to `Completions.create()` and rejects. `extra_body` is
+        # the SDK's sanctioned channel for vendor extensions and lands in the
+        # JSON body, where DeepSeek reads it.
+        #
+        # This is the DOCUMENTED switch, chosen over an undocumented
+        # `reasoning_effort="none"` that also worked, because this API accepts
+        # and silently IGNORES parameters it does not know -- measured
+        # 2026-08-25, `enable_thinking=false` and `thinking_level="minimal"`
+        # both returned 200 and left thinking on. The only proof a switch is
+        # live is the negative test: `{"type": "enabled"}` still 400s on
+        # tool_choice, so this value is being read. `reasoning_effort="none"`
+        # has no such control available.
+        kwargs={"extra_body": {"thinking": {"type": "disabled"}}},
         key_env=("DEEPSEEK_API_KEY",),
         key_url="https://platform.deepseek.com/api_keys",
         cache_breakpoint=False,
-        # UNVERIFIED. The pricing page bills cache hits and misses separately
-        # but never states how a hit is produced or what the floor is. Left as
-        # None on purpose: check_pack refuses rather than guessing, because a
-        # guessed floor that is too low reads as a PASS on a pack that will
-        # never cache. PHASE-3-PLAN.md open question 1.
-        cache_min_tokens=None,
-        note="Phase 3 fallback link. 1M context; caching assumed implicit, unconfirmed.",
+        # MEASURED 2026-08-25, not documented -- DeepSeek's caching guide states
+        # only that caching is "enabled by default for all users" and that a
+        # request must "fully match a cache prefix unit"; it publishes no
+        # minimum. Probed with identical back-to-back prefixes: 32 and 64 tokens
+        # never cached, 128 did, and hits round DOWN to a 128-token boundary (a
+        # 192-token prefix reads back exactly 128). So 128 is one cache unit and
+        # the smallest prefix that can produce a hit at all.
+        #
+        # Confirmed live on the real prompt the same day: a 5,456-token prefix
+        # read back 5,376 then 5,504 as the conversation grew, so the transcript
+        # caches here and not just the prep pack.
+        cache_min_tokens=128,
+        note="Phase 3 fallback link. 1M context; caching implicit, no opt-in.",
     ),
     "ollama": Profile(
         model="llama3.2",

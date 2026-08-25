@@ -43,8 +43,10 @@ any current Claude model, so a pack sized for a different Claude will not cache
 here. Under the threshold the whole pack is reprocessed on every single turn,
 which costs latency in the exact place the design cannot afford it.
 
-Where a provider's floor has never been looked up — DeepSeek today — the check
-reports `NOT RUN` and fails rather than printing a PASS nobody verified.
+Where a provider's floor has never been looked up, the check reports `NOT RUN`
+and fails rather than printing a PASS nobody verified. No current row is in that
+state: DeepSeek's floor was `NOT RUN` until 2026-08-25, when it was measured at
+128 tokens (see `providers.py`) — its own docs publish no minimum.
 
 `b_server.py` logs the counters on the first enrichment of each run:
 

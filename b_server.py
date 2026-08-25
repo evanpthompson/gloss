@@ -27,14 +27,17 @@ load_dotenv()  # must run before importing deepgram — it reads DEEPGRAM_API_KE
 
 import websockets
 from deepgram import AsyncDeepgramClient
-from langchain.chat_models import init_chat_model
-
-import providers
-from cards import card_schema, valid_cards
-from langchain_core.messages import HumanMessage, SystemMessage
 from deepgram.core.events import EventType
 from deepgram.environment import DeepgramClientEnvironment
 from deepgram.listen.v1.types import ListenV1Results
+from langchain.chat_models import init_chat_model
+from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.runnables import RunnableLambda
+
+import failures
+import keyterms
+import providers
+from cards import card_schema, valid_cards
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 log = logging.getLogger("b_server")
@@ -80,7 +83,6 @@ CHANNELS = {"interviewer", "user"}
 # they are raised.
 PROVIDER, PROFILE, _profile_warnings = providers.resolve(os.environ)
 MODEL = PROFILE.model
-MODEL_KWARGS = PROFILE.kwargs
 for _w in _profile_warnings:
     log.warning("%s", _w)
 SESSION_DIR = Path(os.environ.get("GLOSS_SESSION", "sessions/example"))
@@ -165,7 +167,36 @@ def load_prep_pack(directory: Path) -> str:
     return "\n\n".join(f.read_text(encoding="utf-8").strip() for f in files)
 
 
-SYSTEM_PROMPT = INSTRUCTIONS + load_prep_pack(SESSION_DIR)
+PREP_PACK = load_prep_pack(SESSION_DIR)
+SYSTEM_PROMPT = INSTRUCTIONS + PREP_PACK
+
+# Prime the recogniser with the pack's own vocabulary.
+#
+# Everything downstream reads the transcript, so a term Nova-3 mishears is a
+# term no later stage can recover: a jargon card fires on what was heard, and a
+# recall card matches notes against the words that came back. This is the one
+# place in the pipeline where accuracy can still be bought, and the corpus was
+# already sitting here — the prep pack is by definition the vocabulary this
+# conversation will contain.
+#
+# Nova-3 caps keyterms at 500 tokens per request and errors above that, so the
+# list is filled in rank order and the overflow is reported rather than dropped
+# quietly. See keyterms.py for what counts as a term and why.
+KEYTERM_BUDGET = int(os.environ.get("GLOSS_KEYTERM_BUDGET", str(keyterms.DEFAULT_BUDGET_TOKENS)))
+KEYTERMS, _keyterms_dropped = keyterms.from_pack(PREP_PACK, KEYTERM_BUDGET)
+if KEYTERMS:
+    log.info(
+        "Keyterms: priming Nova-3 with %d term(s)%s — %s%s",
+        len(KEYTERMS),
+        f", {_keyterms_dropped} over budget and dropped" if _keyterms_dropped else "",
+        ", ".join(KEYTERMS[:8]),
+        "…" if len(KEYTERMS) > 8 else "",
+    )
+else:
+    # Not an error: a pack can legitimately contain no distinctive vocabulary.
+    # Said out loud anyway, because silence here is indistinguishable from the
+    # extractor being broken.
+    log.warning("Keyterms: none found in %s — Nova-3 runs unprimed", SESSION_DIR)
 
 class _FakeLLM:
     """Offline stand-in for the enrichment model, for the E2E pipe test.
@@ -209,69 +240,211 @@ class _FakeLLM:
 if (_no_key := providers.missing_key(PROFILE, os.environ)) is not None:
     raise SystemExit(f"Cannot start on {PROVIDER}:{MODEL} — {_no_key}")
 
-if PROVIDER == "fake":
-    log.warning("GLOSS_PROVIDER=fake — enrichment is canned, no model will be called")
-    llm = _FakeLLM()
-else:
+
+# --- The fallback chain ----------------------------------------------------
+#
+# One vendor is a single point of failure for a conversation that is happening
+# right now and cannot be rescheduled. `Runnable.with_fallbacks()` puts a second
+# vendor behind the first in-process, so an Anthropic outage costs a slower turn
+# instead of the rest of the call. See PHASE-3-PLAN.md § "Fallback chain —
+# outage resilience, not quota-dodging".
+#
+# Caches are model-scoped, so the fallback link starts cold. Fine for an outage,
+# useless as a cost strategy — this is not a quota dodge.
+
+# The fake provider is the mocked E2E path. Giving it a live fallback would make
+# CI reach the internet on the one path built never to.
+FALLBACK_NAMES: list[str] = (
+    []
+    if PROVIDER == "fake"
+    else [
+        name.strip()
+        for name in os.environ.get("GLOSS_FALLBACKS", "deepseek").split(",")
+        if name.strip() and name.strip() != PROVIDER
+    ]
+)
+
+# Fallbacks take their provider row verbatim. GLOSS_MODEL / GLOSS_MODEL_KWARGS
+# are scoped to the provider you selected and are NOT carried across — a kwarg
+# that follows you onto another vendor is the exact drift providers.py exists to
+# stop, and a chain is the easiest place for it to happen unnoticed.
+LINK_PROFILES: list[tuple[str, providers.Profile]] = [(PROVIDER, PROFILE)]
+for _name in FALLBACK_NAMES:
+    if _name not in providers.PROFILES:
+        raise SystemExit(
+            f"Unknown provider {_name!r} in GLOSS_FALLBACKS.\n"
+            f"Known providers: {', '.join(sorted(providers.PROFILES))}.\n"
+            "Add a row to providers.py before naming it in a chain."
+        )
+    _fallback = providers.PROFILES[_name]
+    # A fallback that cannot authenticate is not a fallback, and you would find
+    # that out during the outage it exists for. Refuse at startup instead, and
+    # name the thing that would change the answer.
+    if (_missing := providers.missing_key(_fallback, os.environ)) is not None:
+        raise SystemExit(
+            f"Fallback link {_name}:{_fallback.model} has no credential — {_missing}\n"
+            "Set the key, or set GLOSS_FALLBACKS= (empty) to run deliberately "
+            "on a single provider."
+        )
+    LINK_PROFILES.append((_name, _fallback))
+
+
+class ProviderUnavailable(Exception):
+    """A link could not answer, so the next one should try.
+
+    Carries the classified `reason` rather than just the original exception:
+    the reason decides both whether the chain moves on and whether this link is
+    worth trying again later in the same conversation. See failures.py.
+    """
+
+    def __init__(self, link: str, reason: failures.Reason, detail: str) -> None:
+        super().__init__(f"{link} {reason}: {detail}")
+        self.link = link
+        self.reason = reason
+        self.detail = detail
+
+
+def system_message_for(profile: providers.Profile) -> SystemMessage:
+    """The frozen system prefix, in the shape this provider caches.
+
+    Built once per link, so the prompt prefix is byte-identical on every turn.
+    Every provider worth using caches on a prefix match, and none of them can do
+    it if the prefix is rebuilt per request — this is why SYSTEM_PROMPT is
+    frozen.
+
+    Anthropic is the one provider that needs the cache boundary named out loud:
+    a `cache_control` block marks where the reusable prefix ends. Everything
+    else caches implicitly on a prefix match and takes no marker, so they get
+    the plain string.
+    """
+    if profile.cache_breakpoint:
+        return SystemMessage(
+            content=[
+                {
+                    "type": "text",
+                    "text": SYSTEM_PROMPT,
+                    "cache_control": {"type": "ephemeral", "ttl": CACHE_TTL},
+                }
+            ]
+        )
+    return SystemMessage(SYSTEM_PROMPT)
+
+
+def _configure(name: str, profile: providers.Profile):
     try:
-        _base_llm = init_chat_model(
-            MODEL,
-            model_provider=PROVIDER,
+        return init_chat_model(
+            profile.model,
+            model_provider=name,
             temperature=0.3,
             max_tokens=512,  # three short cards; a bigger ceiling only adds latency
             # Fail fast rather than retrying. Measured 2026-08-23: a quota 429
             # on the Gemini free tier sent the SDK into four backoff retries and
             # one call took 40.4s, the last retry asking to wait another 58s.
             # Mid-conversation a blocked call is worse than a failed one — the
-            # next turn supersedes it anyway, and an error card at least says
-            # something is wrong. Raise these only if a provider is flaky rather
-            # than rate-limiting. 10s is Gemini's enforced minimum deadline — it
-            # rejects anything shorter with a 400, so this is a ceiling on a
-            # stuck call, not a target; the design budget is still 1-2s.
+            # next turn supersedes it anyway, and with a chain behind it a fast
+            # failure is what lets the next vendor get a turn inside the budget.
+            # 10s is Gemini's enforced minimum deadline — it rejects anything
+            # shorter with a 400, so this is a ceiling on a stuck call, not a
+            # target; the design budget is still 1-2s.
             max_retries=int(os.environ.get("GLOSS_MAX_RETRIES", "1")),
             timeout=float(os.environ.get("GLOSS_TIMEOUT_S", "10")),
-            **MODEL_KWARGS,
+            **profile.kwargs,
         )
-    except Exception as _exc:  # missing key, unknown provider, bad kwarg
+    except Exception as exc:  # missing key, unknown provider, bad kwarg
         raise SystemExit(
-            f"Cannot configure {PROVIDER}:{MODEL} — {type(_exc).__name__}: {_exc}\n"
-            f"Set one of {', '.join(PROFILE.key_env)} (from {PROFILE.key_url}), "
-            "or change GLOSS_PROVIDER. Known providers and their pinned models "
-            "are in providers.py."
-        ) from _exc
+            f"Cannot configure {name}:{profile.model} — {type(exc).__name__}: {exc}\n"
+            f"Set one of {', '.join(profile.key_env)} (from {profile.key_url}), "
+            "or change GLOSS_PROVIDER / GLOSS_FALLBACKS. Known providers and "
+            "their pinned models are in providers.py."
+        ) from exc
 
-    # include_raw keeps the underlying message alongside the parsed cards, so
-    # the token/cache counters in enrich() stay observable. Without it the
-    # parsed dict is all you get and the cache diagnostics never fire.
-    llm = _base_llm.with_structured_output(CARD_SCHEMA, include_raw=True)
 
-# Built once, so the prompt prefix is byte-identical on every turn. Every
-# provider worth using caches on a prefix match, and none of them can do it if
-# the prefix is rebuilt per request — this is why SYSTEM_PROMPT is frozen.
-#
-# Anthropic is the one provider that needs the cache boundary named out loud: a
-# `cache_control` block marks where the reusable prefix ends. Everything else
-# caches implicitly on a prefix match and takes no marker, so they get the
-# plain string. Two provider shapes is the honest price of a mixed chain — it
-# is confined to this one expression on purpose, rather than leaking into
-# enrich(). See PHASE-3-PLAN.md § "Fallback chain".
-if PROFILE.cache_breakpoint:
-    SYSTEM_MESSAGE = SystemMessage(
-        content=[
-            {
-                "type": "text",
-                "text": SYSTEM_PROMPT,
-                "cache_control": {"type": "ephemeral", "ttl": CACHE_TTL},
-            }
-        ]
+def make_link(name: str, profile: providers.Profile):
+    """One vendor, rendering its own prompt shape at invoke time.
+
+    `.with_fallbacks()` hands every link the *same* input, but the two vendors
+    need different message shapes — Anthropic wants `cache_control` blocks and
+    DeepSeek takes no marker at all. So a link is not a model, it is
+    render-then-call: the input is ignored and each link builds its own messages
+    from the shared transcript when it runs. That is what keeps the two-shape
+    branch confined to `system_message_for()` and `build_turn_message()` instead
+    of leaking into enrich(), which § "Fallback chain" named as the price of the
+    hybrid and the place to pay it.
+
+    The answering provider is stamped onto the result. `with_fallbacks()` does
+    not report which link won, and a chain that has silently degraded for an
+    entire conversation is otherwise invisible.
+
+    A link that fails for a reason that cannot resolve itself — a revoked key, a
+    dead balance — is retired for the rest of the session. Retrying it every turn
+    cannot succeed and costs a round trip of latency on the one path with none to
+    spare. Transient reasons never retire a link: a rate limit clears in seconds,
+    and demoting the primary for an hour over a blip would be worse than the
+    blip. See failures.TERMINAL.
+    """
+    if name == "fake":
+        log.warning("GLOSS_PROVIDER=fake — enrichment is canned, no model will be called")
+        model = _FakeLLM()
+    else:
+        # include_raw keeps the underlying message alongside the parsed cards,
+        # so the token/cache counters in enrich() stay observable. Without it
+        # the parsed dict is all you get and the cache diagnostics never fire.
+        model = _configure(name, profile).with_structured_output(
+            CARD_SCHEMA, include_raw=True
+        )
+    system = system_message_for(profile)
+
+    label = f"{name}:{profile.model}"
+    retired: dict[str, failures.Reason] = {}
+
+    async def run(_ignored: object) -> dict:
+        if reason := retired.get("reason"):
+            # Skipped, not called. Raised rather than returned so the chain
+            # moves straight to the next link.
+            raise ProviderUnavailable(label, reason, "retired earlier this session")
+        try:
+            result = await model.ainvoke([system, build_turn_message(profile)])
+        except Exception as exc:
+            reason = failures.classify(exc)
+            detail = str(getattr(exc, "message", "") or exc)[:200]
+            if reason not in failures.FAILOVER:
+                raise
+            if failures.is_terminal(reason):
+                # Loud, and once. This one does not fix itself and the person
+                # running gloss is the only one who can fix it.
+                retired["reason"] = reason
+                log.error(
+                    "%s retired for this session — %s: %s",
+                    label,
+                    reason,
+                    detail,
+                )
+            else:
+                log.warning("%s unavailable — %s: %s", label, reason, detail)
+            raise ProviderUnavailable(label, reason, detail) from exc
+        return {**result, "provider": name, "model": profile.model}
+
+    return RunnableLambda(run, name=f"link:{name}")
+
+
+LINKS = [(name, profile, make_link(name, profile)) for name, profile in LINK_PROFILES]
+PRIMARY = LINKS[0][0]
+chain = LINKS[0][2]
+if len(LINKS) > 1:
+    chain = chain.with_fallbacks(
+        [link for _, _, link in LINKS[1:]],
+        exceptions_to_handle=(ProviderUnavailable,),
     )
-else:
-    SYSTEM_MESSAGE = SystemMessage(SYSTEM_PROMPT)
+    log.info("Chain: %s", " → ".join(f"{n}:{p.model}" for n, p, _ in LINKS))
+
 
 transcript: list[tuple[str, str]] = []
 displays: set[websockets.ServerConnection] = set()
 _inflight: asyncio.Task | None = None
 _logged_cache_stats = False
+# Which link answered last, so a change of provider mid-conversation is
+# reported once rather than every turn or not at all.
+_answered_by: str | None = None
 
 
 async def broadcast(payload: dict) -> None:
@@ -308,7 +481,7 @@ def evict_if_needed() -> None:
         )
 
 
-def build_turn_message():
+def build_turn_message(profile: providers.Profile):
     """The user half of the prompt, shaped so the conversation itself caches.
 
     One content block per turn, appended and never re-merged, with the ASK in a
@@ -339,7 +512,7 @@ def build_turn_message():
     if not transcript:
         return HumanMessage(ASK)
 
-    if not PROFILE.cache_breakpoint:
+    if not profile.cache_breakpoint:
         history = "\n".join(f"[{who}] {text}" for who, text in transcript)
         return HumanMessage(f"{history}\n\n{ASK}")
 
@@ -356,11 +529,11 @@ def build_turn_message():
 
 async def enrich() -> None:
     """One Tier 1 pass over the whole conversation so far."""
-    global _logged_cache_stats
+    global _logged_cache_stats, _answered_by
 
     started = time.monotonic()
     try:
-        result = await llm.ainvoke([SYSTEM_MESSAGE, build_turn_message()])
+        result = await chain.ainvoke(None)
         # Inside the try on purpose: a schema mismatch is a failure that has to
         # reach the screen like any other, not an exception that escapes into
         # the task and leaves the display showing a normal quiet turn.
@@ -375,6 +548,20 @@ async def enrich() -> None:
         cards, dropped = valid_cards(raw_cards, MAX_CARDS)
         if dropped:
             log.debug("Dropped %d malformed card(s)", dropped)
+        # Which link answered, named on every turn. A chain that has silently
+        # degraded for an entire conversation is otherwise invisible: the cards
+        # keep arriving and only the bill and the cache counters change. The
+        # transition itself gets a warning, because it happens once and is the
+        # moment someone would want to know.
+        answered = result.get("provider", "unknown")
+        if answered != _answered_by:
+            log.warning(
+                "Enrichment now answered by %s:%s (was %s)",
+                answered,
+                result.get("model", "?"),
+                _answered_by or "nothing yet",
+            )
+            _answered_by = answered
     except asyncio.CancelledError:
         raise  # superseded by a newer turn — expected, not an error
     except Exception as exc:
@@ -382,14 +569,23 @@ async def enrich() -> None:
         # normal state here, so a silent failure is invisible for the rest of
         # the call — the display has to say so out loud.
         log.exception("Tier 1 enrichment failed")
+        # `with_fallbacks` re-raises the LAST link's exception, so when the whole
+        # chain is out this is the final vendor's reason — which is the one worth
+        # showing. A person glancing at a second screen mid-conversation can act
+        # on "out of credit"; they cannot act on "APIStatusError".
+        if isinstance(exc, ProviderUnavailable):
+            reason, detail = exc.reason, exc.detail
+        else:
+            reason = failures.classify(exc)
+            detail = f"{type(exc).__name__}: {exc}"
         await broadcast(
             {
                 "type": "cards",
                 "cards": [
                     {
                         "kind": "error",
-                        "label": "Enrichment is down",
-                        "detail": f"{type(exc).__name__}: {str(exc)[:120]}",
+                        "label": failures.HEADLINE[reason],
+                        "detail": detail[:120],
                     }
                 ],
             }
@@ -408,7 +604,8 @@ async def enrich() -> None:
         if usage:
             details = usage.get("input_token_details") or {}
             log.info(
-                "Tokens: in=%s out=%s cache_read=%s cache_write=%s",
+                "Tokens: %s in=%s out=%s cache_read=%s cache_write=%s",
+                answered,
                 usage.get("input_tokens"),
                 usage.get("output_tokens"),
                 details.get("cache_read", "n/a"),
@@ -417,7 +614,7 @@ async def enrich() -> None:
         _logged_cache_stats = True
 
     elapsed = time.monotonic() - started
-    log.info("[cards +%4.1fs] %s", elapsed, cards if cards else "(none)")
+    log.info("[cards +%4.1fs %s] %s", elapsed, answered, cards if cards else "(none)")
     if cards:
         await broadcast({"type": "cards", "cards": cards})
 
@@ -442,6 +639,9 @@ async def bridge(a_ws: websockets.ServerConnection, label: str) -> None:
 
     async with client.listen.v1.connect(
         model="nova-3",
+        # Nova-3 only. This replaced the older `keywords` parameter and takes
+        # plain terms with no weighting syntax.
+        keyterm=KEYTERMS or None,
         encoding="linear16",
         sample_rate=SAMPLE_RATE,
         channels=1,
@@ -519,22 +719,46 @@ async def main() -> None:
 
     # Prove credentials, model id and structured-output support before the
     # conversation starts rather than on the first question. It costs one tiny
-    # call. Refusing to start is the right failure here: discovering any of
-    # this mid-conversation is the expensive case, and structured output is
-    # exactly the thing most likely to differ between providers.
-    try:
-        await llm.ainvoke([SYSTEM_MESSAGE, HumanMessage("[interviewer] hello")])
-    except Exception as exc:
-        raise SystemExit(
-            f"Cannot reach {PROVIDER}:{MODEL} — {type(exc).__name__}: {exc}\n"
-            "Check GLOSS_PROVIDER / GLOSS_MODEL and that provider's key is set "
-            "(google_genai -> GEMINI_API_KEY, https://aistudio.google.com/apikey)."
-        ) from exc
-    log.info("Preflight OK: %s:%s answered and matched the card schema", PROVIDER, MODEL)
+    # call per link. Refusing to start is the right failure here: discovering
+    # any of this mid-conversation is the expensive case, and structured output
+    # is exactly the thing most likely to differ between providers.
+    #
+    # EVERY link, not just the primary. An unproven fallback is not a fallback —
+    # it is a second failure waiting to happen at the worst moment, and it would
+    # be discovered during the outage it exists for. This is also what licenses
+    # 401/402/403 to appear in FAILOVER_STATUS: once a live call has proved each
+    # credential here, a credential error later can only be one that died
+    # mid-conversation.
+    #
+    # The links are invoked exactly as enrich() invokes them, transcript and
+    # all — which is empty at startup, so each sends the frozen system prefix
+    # plus the constant ASK and nothing else.
+    for name, profile, link in LINKS:
+        try:
+            await link.ainvoke(None)
+        except Exception as exc:
+            role = "primary" if name == PRIMARY else "fallback"
+            raise SystemExit(
+                f"Cannot reach {role} link {name}:{profile.model} — "
+                f"{type(exc).__name__}: {exc.__cause__ or exc}\n"
+                f"Set one of {', '.join(profile.key_env)} (from {profile.key_url}), "
+                "or change GLOSS_PROVIDER / GLOSS_FALLBACKS. Set GLOSS_FALLBACKS= "
+                "(empty) to run deliberately on a single provider."
+            ) from exc
+        log.info(
+            "Preflight OK: %s:%s answered and matched the card schema",
+            name,
+            profile.model,
+        )
 
     async with websockets.serve(handler, HOST, PORT, max_size=None):
         log.info("Listening on ws://%s:%s/{interviewer,user,display}", HOST, PORT)
-        log.info("Tier 1: %s, notes from %s, max %s cards", MODEL, SESSION_DIR, MAX_CARDS)
+        log.info(
+            "Tier 1: %s, notes from %s, max %s cards",
+            " → ".join(f"{n}:{p.model}" for n, p, _ in LINKS),
+            SESSION_DIR,
+            MAX_CARDS,
+        )
         await asyncio.Future()  # run forever
 
 

@@ -4,7 +4,7 @@ RUN pip install --no-cache-dir uv
 
 WORKDIR /app
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-install-project
+RUN uv sync --frozen --no-install-project --no-dev
 
 # Every top-level module, not a hand-listed set. b_server.py was named alone
 # here until it grew imports (providers.py, cards.py), at which point the image
