@@ -78,5 +78,12 @@ trigger-e2e-tests:
     project: navetoocool/gloss-e2e
     branch: main
     strategy: depend
+  variables:
+    # Name the commit under test. Without this the e2e clones whatever this
+    # project's main happens to be when its own job starts, which is not
+    # necessarily the commit that triggered it — two pushes landing close
+    # together and the e2e reports green for code it never built. It refuses
+    # to run rather than test the wrong revision.
+    GLOSS_COMMIT_SHA: $CI_COMMIT_SHA
   rules:
     - if: '$CI_COMMIT_BRANCH == "main"'
