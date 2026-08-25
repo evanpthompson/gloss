@@ -31,6 +31,9 @@
     letter-spacing: 0.12em; color: var(--kind); margin-bottom: 0.4vh;
   }
   @keyframes in { from { opacity: 0; transform: translateY(6px); } }
+  /* Cards expire rather than being cleared, so they need a way out that does
+     not snap. Removal is the only motion on an otherwise still screen. */
+  .card.out { opacity: 0; transition: opacity 220ms ease-in; }
   /* Empty is the normal state, not an error — most turns produce no cards. */
   #idle { color: var(--dim); font-size: clamp(13px, 1.3vw, 18px); text-align: center; }
   #status { font-size: 12px; color: var(--dim); display: flex; gap: 0.6em; align-items: center; }
@@ -47,37 +50,103 @@
   const state = document.getElementById("state");
   const url = (location.search.match(/[?&]ws=([^&]+)/) || [])[1] || "ws://localhost:8765/display";
 
-  const idle = () => { cards.innerHTML = '<div id="idle">listening</div>'; };
+  const TAGS = { recall: "your notes", jargon: "unfamiliar term", error: "not working" };
 
-  function render(list) {
-    if (!list.length) return;           // keep the previous cards up; blanking mid-glance loses them
-    cards.innerHTML = "";
+  // One entry per visible card, keyed by the topic id the server assigns.
+  //
+  // The display used to replace every card on each turn, so a topic discussed
+  // across four turns flashed four times and nothing stayed still long enough
+  // to be read — on a screen whose entire job is to be readable in a glance.
+  // Now a card is found by id and updated in place; only genuinely new topics
+  // move anything on screen.
+  //
+  // Lifecycle is not a local policy: the TTL arrives on each card and the cap
+  // arrives with the batch, so a second screen opened halfway through a call is
+  // configured by the first message it receives.
+  const live = new Map();   // id -> { el, timer, touched }
+
+  const showIdle = () => {
+    if (live.size === 0 && !document.getElementById("idle"))
+      cards.innerHTML = '<div id="idle">listening</div>';
+  };
+  const dropIdle = () => document.getElementById("idle")?.remove();
+
+  function remove(id) {
+    const entry = live.get(id);
+    if (!entry) return;
+    clearTimeout(entry.timer);
+    live.delete(id);                       // freed immediately, so the same
+    entry.el.classList.add("out");         // topic returning mid-fade gets a
+    setTimeout(() => entry.el.remove(), 220);  // fresh element, not this one
+    setTimeout(showIdle, 220);
+  }
+
+  function fill(el, c) {
+    el.dataset.kind = c.kind;
+    el.querySelector(".tag").textContent = TAGS[c.kind] || c.kind;
+    el.querySelector(".label").textContent = c.label;
+    el.querySelector(".detail").textContent = c.detail;
+  }
+
+  function render(list, max) {
+    if (!list.length) return;   // zero cards is the normal turn; leave the screen alone
+    dropIdle();
     for (const c of list) {
-      const el = document.createElement("div");
-      el.className = "card";
-      el.dataset.kind = c.kind;
-      el.innerHTML =
-        `<div class="tag"></div><div class="label"></div><div class="detail"></div>`;
-      el.querySelector(".tag").textContent =
-        { recall: "your notes", jargon: "unfamiliar term", error: "not working" }[c.kind] || c.kind;
-      el.querySelector(".label").textContent = c.label;
-      el.querySelector(".detail").textContent = c.detail;
-      cards.appendChild(el);
+      const id = c.id || c.label;
+      let entry = live.get(id);
+      if (entry) {
+        fill(entry.el, c);      // in place: no animation, no reflow, no flash
+        clearTimeout(entry.timer);
+      } else {
+        const el = document.createElement("div");
+        el.className = "card";
+        el.innerHTML = '<div class="tag"></div><div class="label"></div><div class="detail"></div>';
+        fill(el, c);
+        cards.appendChild(el);  // new topics append; existing ones never move
+        entry = { el };
+        live.set(id, entry);
+      }
+      entry.kind = c.kind;
+      entry.touched = Date.now();
+      entry.timer = setTimeout(() => remove(id), (c.ttl ?? 90) * 1000);
     }
+    // Evict by least-recently-mentioned rather than oldest-created: a topic the
+    // conversation keeps returning to should outlive a one-off from earlier.
+    //
+    // Error cards are outside the cap. They are the server speaking about
+    // itself rather than content, they clear themselves in seconds, and the
+    // first version of this let a transient outage evict a real card — which
+    // then never came back, because the card that displaced it expired into
+    // nothing. A twenty-second error must not cost a topic permanently.
+    const content = () => [...live.entries()].filter(([, e]) => e.kind !== "error");
+    while (content().length > (max ?? 3)) {
+      let stalest = null;
+      for (const [id, e] of content())
+        if (!stalest || e.touched < live.get(stalest).touched) stalest = id;
+      remove(stalest);
+    }
+  }
+
+  function wipe() {
+    for (const entry of live.values()) clearTimeout(entry.timer);
+    live.clear();
+    cards.innerHTML = '<div id="idle">listening</div>';
   }
 
   function connect() {
     const ws = new WebSocket(decodeURIComponent(url));
-    ws.onopen = () => { dot.classList.add("up"); state.textContent = "connected"; idle(); };
+    ws.onopen = () => { dot.classList.add("up"); state.textContent = "connected"; wipe(); };
     ws.onmessage = (e) => {
       const msg = JSON.parse(e.data);
-      if (msg.type === "cards") render(msg.cards);
-      if (msg.type === "clear") idle();
+      if (msg.type === "cards") render(msg.cards, msg.max);
+      if (msg.type === "clear") wipe();
     };
     ws.onclose = () => {
       dot.classList.remove("up");
       state.textContent = "reconnecting";
-      setTimeout(connect, 1000);        // b_server restarts often during a session; just come back
+      // b_server restarts often during a session. Cards from before the restart
+      // describe a conversation state the server no longer has, so they go.
+      setTimeout(connect, 1000);
     };
     ws.onerror = () => ws.close();
   }

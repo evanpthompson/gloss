@@ -596,6 +596,43 @@ prefix caching everywhere, so `SYSTEM_PROMPT` is built once at startup and the
 volatile transcript always goes last, whichever provider is configured.
 
 **Noise control:**
+### Card lifecycle
+
+Cards persist while their topic is live, rather than being replaced each turn.
+Every card carries an `id` naming its topic; the display keys a map on it, so
+the same topic raised again **updates the card in place** — same DOM node, same
+position — instead of tearing the screen down and rebuilding it. A topic
+discussed across four turns used to flash four times, on a screen whose entire
+job is to be readable in a glance.
+
+`id` is optional even though the schema asks for it, and falls back to a slug of
+the label. `required` is advice to a model rather than a constraint on it, and a
+card dropped for missing an id would be a real card lost over bookkeeping. The
+fallback produces the same id the model would have supplied, so a turn where it
+forgets stays continuous with the turns where it does not.
+
+Each card expires `GLOSS_CARD_TTL_S` (default 90) after the last turn that
+raised it, and the clock is refreshed when the topic recurs. When more topics
+are live than `GLOSS_MAX_CARDS`, the **least recently mentioned** is dropped —
+not the oldest — so a thread the conversation keeps returning to outlives a
+one-off from earlier.
+
+**Error cards sit outside that cap** and expire on their own much shorter
+`GLOSS_ERROR_TTL_S` (default 20). Counting them was the first implementation and
+it was wrong in a way only a browser showed: an error evicted a real card, and
+when the error expired the topic did not return, because the thing that
+displaced it had expired into nothing. A twenty-second outage must not cost a
+topic permanently. An error card is the server speaking about itself, not
+content.
+
+Neither value is a display policy. The TTL rides on each card and the cap rides
+on the batch, so a second screen opened halfway through a call is configured by
+the first message it receives, and two screens cannot disagree.
+
+`display.html` is the one part of gloss with no automated test: CI runs a
+Python-only image and adding a browser to it is a larger change than this
+warranted. Its behaviour was verified by hand against the DOM.
+
 - Utterances shorter than `GLOSS_MIN_CHARS` (default 25) never trigger a
   call — "mm-hm", "right", "yeah exactly" are turn-taking, not questions.
 - One enrichment in flight at a time. A new turn **cancels** the previous

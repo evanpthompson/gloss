@@ -88,6 +88,20 @@ for _w in _profile_warnings:
 SESSION_DIR = Path(os.environ.get("GLOSS_SESSION", "sessions/example"))
 MIN_CHARS = int(os.environ.get("GLOSS_MIN_CHARS", "25"))
 MAX_CARDS = int(os.environ.get("GLOSS_MAX_CARDS", "3"))
+# How long a card stays up after the last turn that raised its topic. Cards
+# used to be replaced wholesale every turn, so a topic discussed across four
+# turns flashed four times and nothing stayed readable long enough to be read.
+# Now a card persists and its clock is refreshed whenever the topic recurs.
+#
+# 90s is about two or three conversational turns: long enough that a glance
+# away and back still finds the card, short enough that the screen does not
+# accumulate a wall of things nobody is talking about any more.
+CARD_TTL_S = float(os.environ.get("GLOSS_CARD_TTL_S", "90"))
+# Errors clear themselves much faster. A transient failure that has already
+# recovered must not sit on screen claiming the tool is down — the next
+# successful turn will not necessarily overwrite it, because zero cards is the
+# normal result and broadcasts nothing at all.
+ERROR_TTL_S = float(os.environ.get("GLOSS_ERROR_TTL_S", "20"))
 # The transcript is no longer windowed. A rolling window was the amnesia: a
 # term defined in minute three was gone by minute five, and a glossary that
 # cannot connect a thing said now to the thing that defined it earlier is not
@@ -132,7 +146,10 @@ Two kinds, and nothing else:
   instead of bluffing past it.
 
 Fields: `label` is at most 6 words and is the only part that gets read at a
-glance. `detail` is at most 25 words.
+glance. `detail` is at most 25 words. `id` is a short lowercase hyphenated
+slug naming the topic — "kestrel", "contract-testing". Reuse the SAME id
+every time the conversation returns to that topic; the card then updates in
+place instead of appearing a second time.
 
 Returning an empty list is the correct answer for most turns. Small talk,
 logistics, a question already covered by the previous card, an utterance
@@ -583,11 +600,17 @@ async def enrich() -> None:
                 "type": "cards",
                 "cards": [
                     {
+                        # One stable id for every enrichment failure: a second
+                        # failure updates the card in place rather than stacking
+                        # a pile of them, and a changed reason rewrites it.
+                        "id": "enrichment-error",
                         "kind": "error",
                         "label": failures.HEADLINE[reason],
                         "detail": detail[:120],
+                        "ttl": ERROR_TTL_S,
                     }
                 ],
+                "max": MAX_CARDS,
             }
         )
         return
@@ -616,7 +639,16 @@ async def enrich() -> None:
     elapsed = time.monotonic() - started
     log.info("[cards +%4.1fs %s] %s", elapsed, answered, cards if cards else "(none)")
     if cards:
-        await broadcast({"type": "cards", "cards": cards})
+        # TTL travels with each card and the cap travels with the batch, so the
+        # display holds no policy of its own. A second screen opened halfway
+        # through a call is then configured by the first message it receives.
+        await broadcast(
+            {
+                "type": "cards",
+                "cards": [{**c, "ttl": CARD_TTL_S} for c in cards],
+                "max": MAX_CARDS,
+            }
+        )
 
 
 def on_turn_end(text: str) -> None:

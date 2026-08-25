@@ -428,6 +428,42 @@ the failure was staged, not the failure.
 **Done when:** a topic raised on turn 1 and returned to on turn 4 shows one
 card that updates, not two that flash.
 
+**Result: PASSED 2026-08-25**, verified in a real browser against the DOM rather
+than by reading the code. Turn 1 raises "Kestrel"; a quiet turn leaves the
+screen untouched; turn 3 adds a second topic; turn 4 returns to Kestrel and the
+card count stays at two, **reusing the same DOM node in the same position** with
+only the detail text changed.
+
+**Two departures from the plan, both deliberate.**
+
+1. **`id` is optional, not required.** The plan had the model supply it. Making
+   it required means a model that omits the field costs a real card over a
+   bookkeeping one — and `required` is advice to a model, not a constraint on
+   it, which `cards.py` already documents for the zero-card case. It defaults to
+   a slug derived from the label, which is stable whenever the label is, and
+   which produces the same id the model would have supplied. Duplicate ids
+   within a batch are disambiguated rather than merged, since two cards sharing
+   an id would fight over one slot.
+
+2. **Error cards sit outside the card cap.** The first version counted them,
+   and the browser check caught what that means: an error card evicted
+   "Kestrel", and when the error expired twenty seconds later the topic did not
+   come back — the card that displaced it had expired into nothing. A transient
+   outage must not permanently destroy content. An error card is the server
+   speaking about itself, so it now shows alongside the cap rather than inside
+   it. Verified: three content cards plus an error, error clears, all three
+   still there.
+
+Eviction is by **least-recently-mentioned**, not oldest-created, so a topic the
+conversation keeps returning to outlives a one-off raised earlier. Lifecycle
+values are not a display policy: the TTL rides on each card and the cap rides on
+the batch, so a second screen opened halfway through a call is configured by the
+first message it receives.
+
+**Not covered by the test suite.** `display.html` is the one part of gloss with
+no automated test — CI runs a Python-only image and adding a browser to it is a
+bigger change than this warranted. The browser verification above was manual.
+
 ---
 
 ### S5 — Local retrieval, as a tag-team and a floor (not started)

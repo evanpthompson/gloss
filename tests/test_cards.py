@@ -7,11 +7,12 @@ import cards
 from cards import Card, card_schema, valid_cards
 
 GOOD = {"kind": "jargon", "label": "Kestrel", "detail": "Their deploy gate."}
+WITH_ID = {"id": "kestrel", **GOOD}
 
 
 def test_a_good_card_survives() -> None:
     kept, dropped = valid_cards([GOOD], 3)
-    assert kept == [GOOD]
+    assert kept == [WITH_ID]
     assert dropped == 0
 
 
@@ -26,7 +27,7 @@ def test_the_empty_object_gemini_returns_is_dropped_not_fatal() -> None:
 
 def test_one_bad_card_does_not_take_the_good_ones_with_it() -> None:
     kept, dropped = valid_cards([GOOD, {}, {"kind": "nope"}], 3)
-    assert kept == [GOOD]
+    assert kept == [WITH_ID]
     assert dropped == 2
 
 
@@ -81,3 +82,46 @@ def test_the_schema_and_the_validator_are_the_same_contract() -> None:
     schema_kinds = set(card_schema(3)["properties"]["cards"]["items"]["properties"]["kind"]["enum"])
     assert schema_kinds == set(cards.CardKind.__args__)
     assert Card.model_validate(GOOD).kind in schema_kinds
+
+
+# --- card identity, which is what lets the display update instead of flash ---
+
+
+def test_a_missing_id_is_derived_rather_than_dropping_the_card() -> None:
+    """`required` is advice to a model, not a constraint on it. Losing a real
+    card over a bookkeeping field would be the wrong trade."""
+    kept, dropped = valid_cards([GOOD], 3)
+    assert dropped == 0
+    assert kept[0]["id"] == "kestrel"
+
+
+def test_a_supplied_id_is_kept_verbatim() -> None:
+    kept, _ = valid_cards([{"id": "deploy-gate", **GOOD}], 3)
+    assert kept[0]["id"] == "deploy-gate"
+
+
+def test_the_derived_id_matches_what_the_model_would_supply() -> None:
+    """The fallback has to agree with the model's own convention, or a turn
+    where it omits the id would break continuity with turns where it does not."""
+    without = valid_cards([GOOD], 3)[0][0]["id"]
+    with_it = valid_cards([WITH_ID], 3)[0][0]["id"]
+    assert without == with_it
+
+
+def test_two_cards_cannot_claim_the_same_slot() -> None:
+    """Same id in one batch would leave two cards fighting over one position."""
+    kept, _ = valid_cards([GOOD, dict(GOOD)], 3)
+    assert len({c["id"] for c in kept}) == len(kept)
+
+
+def test_an_id_is_never_empty() -> None:
+    """The display keys a Map on it; an empty key would collapse unrelated
+    cards onto each other."""
+    kept, _ = valid_cards([{"kind": "jargon", "label": "!!!", "detail": "x"}], 3)
+    assert kept[0]["id"]
+
+
+def test_slug_is_stable_and_bounded() -> None:
+    assert cards.slug("Contract Testing!") == "contract-testing"
+    assert cards.slug("  Kestrel  ") == "kestrel"
+    assert len(cards.slug("word " * 40)) <= 40

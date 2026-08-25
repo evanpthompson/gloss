@@ -23,6 +23,7 @@ own, and the junk ones are dropped and counted.
 
 from __future__ import annotations
 
+import re
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -33,10 +34,34 @@ server speaking about itself, not model output, and letting the model emit one
 would let a bad turn impersonate an outage."""
 
 
+def slug(text: str, limit: int = 40) -> str:
+    """A stable identifier derived from text. Lowercase, hyphenated, bounded."""
+    return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:limit]
+
+
 class Card(BaseModel):
     """One card. Every field is load-bearing on a screen read in one second."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: str = Field(
+        default="",
+        description=(
+            "Short lowercase hyphenated slug naming the TOPIC, e.g. "
+            "'kestrel' or 'contract-testing'. Use the SAME id whenever the "
+            "conversation returns to the same topic, so the card updates in "
+            "place instead of appearing twice."
+        ),
+    )
+    """Identity across turns, so the display can update a card rather than
+    replace it.
+
+    **Optional on purpose**, though the schema asks for it. `required` is
+    advice to a model rather than a constraint on it, and a card dropped for
+    missing an id would be a real card lost over a bookkeeping field. When it
+    is absent, `valid_cards` derives one from the label — which is stable
+    whenever the label is, so the common case still works.
+    """
 
     kind: CardKind
     label: str = Field(min_length=1, description="Two or three words, the thing itself.")
@@ -108,7 +133,15 @@ def valid_cards(raw: Any, max_cards: int) -> tuple[list[dict[str, Any]], int]:
     dropped = 0
     for item in raw:
         try:
-            kept.append(Card.model_validate(item).model_dump())
+            card = Card.model_validate(item).model_dump()
         except Exception:  # pydantic ValidationError, or item is not a mapping
             dropped += 1
+            continue
+        # Fall back to a label-derived id rather than dropping the card. Two
+        # cards in one batch that collapse to the same id would fight over one
+        # slot on screen, so a duplicate is disambiguated rather than merged.
+        card["id"] = card["id"].strip() or slug(card["label"]) or "card"
+        while card["id"] in {c["id"] for c in kept}:
+            card["id"] += "-2"
+        kept.append(card)
     return kept[:max_cards], dropped
