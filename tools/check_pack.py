@@ -22,19 +22,19 @@ Exit code is 0 only if both checks pass, so this can gate a script.
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import sys
 from pathlib import Path
 
-# Minimum prefix size below which the provider will not cache, in tokens.
-# Sources: ai.google.dev/gemini-api/docs/caching, docs.claude.com prompt caching.
-# When adding a provider, look the number up — do not estimate it.
-CACHE_MINIMUMS = {
-    "google_genai": 4096,  # gemini-3.x Flash; 2.5 Flash was 2048 but is closed to new users
-    "anthropic": 4096,  # claude-haiku-4-5; other Claude models differ
-    "bedrock": 4096,  # follows the underlying model
-    "ollama": 0,  # local; no cache floor that costs money
-}
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from providers import PROFILES  # noqa: E402  (needs the path insert above)
+
+# The cache floors used to be a second copy of the numbers in providers.py,
+# which meant this gate and the server could disagree about whether a pack was
+# big enough — and the gate is the one that says "OK". One table now, and it is
+# the same table the server resolves its model from.
 
 # Anything matching these must not be in a pack that becomes a system prompt.
 # Deny-listing is the weaker half of this gate by design: it cannot enumerate
@@ -66,7 +66,14 @@ def count_tokens(text: str) -> int:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("pack", type=Path, help="prep pack directory, e.g. sessions/my-call")
-    ap.add_argument("--provider", default="google_genai", choices=sorted(CACHE_MINIMUMS))
+    # Defaults to whatever GLOSS_PROVIDER the server would resolve, so
+    # `check_pack sessions/x` gates against the provider actually in use rather
+    # than against whichever one was hardcoded here.
+    ap.add_argument(
+        "--provider",
+        default=os.environ.get("GLOSS_PROVIDER", "google_genai"),
+        choices=sorted(PROFILES),
+    )
     args = ap.parse_args()
 
     files = sorted(args.pack.glob("*.md"))
@@ -99,9 +106,25 @@ def main() -> int:
     # --- 2. cache minimum ---------------------------------------------------
     combined = "\n\n".join(f.read_text(encoding="utf-8").strip() for f in files)
     tokens = count_tokens(combined)
-    minimum = CACHE_MINIMUMS[args.provider]
+    profile = PROFILES[args.provider]
+    minimum = profile.cache_min_tokens
 
-    if tokens < minimum:
+    if minimum is None:
+        # Nobody has looked this provider's floor up yet. That is not the same
+        # as "no floor": a pack that silently never caches costs latency on
+        # every single turn, in the one place this design has none. Report it
+        # as unrun and fail, rather than printing a PASS nobody checked.
+        ok = False
+        print(
+            f"NOT RUN  {args.provider}'s cache minimum is unverified, so this "
+            f"pack (~{tokens} tokens) cannot be checked."
+        )
+        print(f"         {profile.note}")
+        print(
+            "         Look the floor up and set cache_min_tokens for "
+            f"{args.provider!r} in providers.py — an unrun check is not a pass."
+        )
+    elif tokens < minimum:
         ok = False
         short = minimum - tokens
         print(
@@ -111,7 +134,10 @@ def main() -> int:
         print("      Every turn will reprocess the whole pack. Add more material,")
         print("      or accept the latency knowingly.")
     else:
-        print(f"PASS  ~{tokens} tokens, clears {args.provider}'s {minimum}-token minimum")
+        print(
+            f"PASS  ~{tokens} tokens, clears {args.provider}'s {minimum}-token "
+            f"minimum for {profile.model}"
+        )
 
     print(f"\n{'OK' if ok else 'NOT READY'}: {args.pack} ({len(files)} files)")
     return 0 if ok else 1

@@ -35,10 +35,16 @@ card you can read in a second.
 
 **Longer is genuinely better here, up to a point.** Every provider has a
 minimum prefix size below which it never caches, and all of them fail silently
-— no error, the counters just stay at zero. Gemini 3.x Flash and Claude Haiku 4.5
-both need **4096 tokens** — roughly 3000 words. Under that threshold the whole pack is reprocessed on
-every single turn, which costs latency in the exact place the design cannot
-afford it.
+— no error, the counters just stay at zero. The floor per provider lives in
+`providers.py` and `check_pack.py` reads it from there, so there is one number
+rather than two that can disagree. Gemini 3.x Flash and Claude Haiku 4.5 both
+need **4096 tokens** — roughly 3000 words. Haiku 4.5 has the highest minimum of
+any current Claude model, so a pack sized for a different Claude will not cache
+here. Under the threshold the whole pack is reprocessed on every single turn,
+which costs latency in the exact place the design cannot afford it.
+
+Where a provider's floor has never been looked up — DeepSeek today — the check
+reports `NOT RUN` and fails rather than printing a PASS nobody verified.
 
 `b_server.py` logs the counters on the first enrichment of each run:
 

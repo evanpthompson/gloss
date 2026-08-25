@@ -1,4 +1,8 @@
 .env
+# Backups of .env hold the same live keys the original does, and plain `.env`
+# does not match them. Caught by inspection before a commit, not after.
+.env.bak*
+.env.*.bak
 .venv/
 __pycache__/
 *.py[cod]

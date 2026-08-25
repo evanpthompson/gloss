@@ -29,6 +29,8 @@ load_dotenv()  # must run before importing deepgram — it reads DEEPGRAM_API_KE
 import websockets
 from deepgram import AsyncDeepgramClient
 from langchain.chat_models import init_chat_model
+
+import providers
 from langchain_core.messages import HumanMessage, SystemMessage
 from deepgram.core.events import EventType
 from deepgram.environment import DeepgramClientEnvironment
@@ -66,15 +68,21 @@ CHANNELS = {"interviewer", "user"}
 # vars and a `uv add` of that provider package — no code change. Note Gemini is
 # NOT available via Bedrock, so "bedrock" and "google_genai" are alternatives
 # to each other, not layers.
-MODEL = os.environ.get("GLOSS_MODEL", "gemini-3.6-flash")
-PROVIDER = os.environ.get("GLOSS_PROVIDER", "google_genai")
-# Escape hatch for provider-specific knobs, as JSON, so they stay out of the
-# code. Set this — it is not optional in practice. Measured 2026-08-23 on
-# gemini-3.6-flash with the example pack: default thinking 2.7s and 4.4s,
-# thinking_level "low" 15.6s, thinking_level "minimal" 1.7s and 1.3s. Only
-# "minimal" fits the 1-2s budget. Note 3.x rejects thinking_budget (400); that
-# parameter was 2.5-era.
-MODEL_KWARGS = json.loads(os.environ.get("GLOSS_MODEL_KWARGS", "{}"))
+# The model id, the kwargs that model takes, whether it needs its cache prefix
+# marked explicitly, and the size below which it stops caching all have to
+# agree. They live as one row in providers.py rather than as four independent
+# environment variables, because four variables drift: setting
+# GLOSS_PROVIDER=anthropic while an old GLOSS_MODEL_KWARGS still held Gemini's
+# thinking_level produced a 400 from a vendor that has never heard of it.
+#
+# resolve() refuses rather than defaults — an unknown provider, or a kwargs
+# override that does not also pin a model. Both refusals are explained where
+# they are raised.
+PROVIDER, PROFILE, _profile_warnings = providers.resolve(os.environ)
+MODEL = PROFILE.model
+MODEL_KWARGS = PROFILE.kwargs
+for _w in _profile_warnings:
+    log.warning("%s", _w)
 SESSION_DIR = Path(os.environ.get("GLOSS_SESSION", "sessions/example"))
 MIN_CHARS = int(os.environ.get("GLOSS_MIN_CHARS", "25"))
 MAX_CARDS = int(os.environ.get("GLOSS_MAX_CARDS", "3"))
@@ -201,29 +209,17 @@ class _FakeLLM:
         }
 
 
+# Every provider states its own credential variables, including the fake. The
+# fake does not call out, but it must not be the one path where missing
+# credentials go unnoticed — a deployment that forgot the key should fail in CI
+# rather than in a live conversation. The variables are named per provider in
+# providers.py rather than matched on a "*_API_KEY" suffix, because
+# DEEPGRAM_API_KEY is always set here and would satisfy any such pattern, so a
+# suffix guard would never once fire.
+if (_no_key := providers.missing_key(PROFILE, os.environ)) is not None:
+    raise SystemExit(f"Cannot start on {PROVIDER}:{MODEL} — {_no_key}")
+
 if PROVIDER == "fake":
-    # Still requires a key, so the fake path exercises the same credential
-    # requirement as a real one rather than quietly skipping it.
-    #
-    # Named explicitly rather than matched on a "*_API_KEY" suffix: DEEPGRAM_API_KEY
-    # is always set here and would satisfy any such pattern, so the guard would
-    # never once fire. Add the variable when adding a provider.
-    if not any(
-        os.environ.get(name)
-        for name in (
-            "GEMINI_API_KEY",
-            "GOOGLE_API_KEY",
-            "ANTHROPIC_API_KEY",
-            "OPENAI_API_KEY",
-            "AWS_ACCESS_KEY_ID",
-        )
-    ):
-        raise SystemExit(
-            "GLOSS_PROVIDER=fake still requires a model-provider key to be set.\n"
-            "The fake does not call out, but it must not be the one path where "
-            "missing credentials go unnoticed — set a dummy key, e.g.\n"
-            "  GEMINI_API_KEY=unused-mock-key"
-        )
     log.warning("GLOSS_PROVIDER=fake — enrichment is canned, no model will be called")
     llm = _FakeLLM()
 else:
@@ -249,8 +245,9 @@ else:
     except Exception as _exc:  # missing key, unknown provider, bad kwarg
         raise SystemExit(
             f"Cannot configure {PROVIDER}:{MODEL} — {type(_exc).__name__}: {_exc}\n"
-            "Set that provider's key (google_genai -> GEMINI_API_KEY, from "
-            "https://aistudio.google.com/apikey), or change GLOSS_PROVIDER/GLOSS_MODEL."
+            f"Set one of {', '.join(PROFILE.key_env)} (from {PROFILE.key_url}), "
+            "or change GLOSS_PROVIDER. Known providers and their pinned models "
+            "are in providers.py."
         ) from _exc
 
     # include_raw keeps the underlying message alongside the parsed cards, so
@@ -268,7 +265,7 @@ else:
 # plain string. Two provider shapes is the honest price of a mixed chain — it
 # is confined to this one expression on purpose, rather than leaking into
 # enrich(). See PHASE-3-PLAN.md § "Fallback chain".
-if PROVIDER == "anthropic":
+if PROFILE.cache_breakpoint:
     SYSTEM_MESSAGE = SystemMessage(
         content=[
             {
