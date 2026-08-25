@@ -320,6 +320,20 @@ emits 158–222 output tokens against Gemini's 46–140) is identified but untri
 **Done when:** the turn-20 callback produces a correct card, and per-turn cost
 has not grown superlinearly (read the counters, not the intent).
 
+**Result: PASSED 2026-08-24.** A term defined in turn 2 ("Kestrel", an internal
+deploy gate) was correctly recalled at turn 12 and again at turn 6 of a second
+run — impossible under the old 6-turn window, which evicted it by turn 8.
+`cache_read` climbs 7,038 → 7,382 → 7,730 → 8,079, reaching **99.4% of input
+read from cache**, so cost per turn is sublinear in conversation length rather
+than superlinear. Latency 1.1–1.7s, back inside budget.
+
+The shape took three attempts, and the two failures are recorded in `SPEC.md`
+because both looked correct and both failed silently — `cache_read` stays
+pinned at the system-prefix size, which reads as healthy. Anything that
+re-merges history between turns, or lets a constant suffix ride on the newest
+turn, breaks the byte-prefix match. One block per turn, appended, never
+re-merged; breakpoints on the last two; the constant ASK last of all.
+
 ### S3 — Fallback chain
 
 1. `uv add langchain-deepseek`; key from `platform.deepseek.com`.

@@ -29,7 +29,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from providers import PROFILES  # noqa: E402  (needs the path insert above)
+from providers import PROFILES, estimate_tokens  # noqa: E402  (needs the path insert above)
 
 # The cache floors used to be a second copy of the numbers in providers.py,
 # which meant this gate and the server could disagree about whether a pack was
@@ -51,16 +51,6 @@ LEAK_PATTERNS = [
     (r"\bNEEDS INPUT\b", "unfilled placeholder"),
     (r"\brecruiter\b.*\b(?:said|told|mentioned)\b", "recruiter side-channel"),
 ]
-
-
-def count_tokens(text: str) -> int:
-    """Rough token count. Deliberately an estimate, deliberately conservative.
-
-    ~3.6 chars/token under-counts English prose slightly, so a pack that passes
-    this check has real margin rather than sitting exactly on the line. An exact
-    count needs a provider call, which this gate should not require.
-    """
-    return int(len(text) / 3.6)
 
 
 def main() -> int:
@@ -105,7 +95,7 @@ def main() -> int:
 
     # --- 2. cache minimum ---------------------------------------------------
     combined = "\n\n".join(f.read_text(encoding="utf-8").strip() for f in files)
-    tokens = count_tokens(combined)
+    tokens = estimate_tokens(combined)
     profile = PROFILES[args.provider]
     minimum = profile.cache_min_tokens
 

@@ -18,7 +18,6 @@ import json
 import logging
 import os
 import time
-from collections import deque
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -87,7 +86,18 @@ for _w in _profile_warnings:
 SESSION_DIR = Path(os.environ.get("GLOSS_SESSION", "sessions/example"))
 MIN_CHARS = int(os.environ.get("GLOSS_MIN_CHARS", "25"))
 MAX_CARDS = int(os.environ.get("GLOSS_MAX_CARDS", "3"))
-WINDOW_TURNS = int(os.environ.get("GLOSS_WINDOW_TURNS", "6"))
+# The transcript is no longer windowed. A rolling window was the amnesia: a
+# term defined in minute three was gone by minute five, and a glossary that
+# cannot connect a thing said now to the thing that defined it earlier is not
+# doing its job. Every turn is sent, every turn.
+#
+# Bounded rather than unbounded, though. Haiku 4.5's window is 200K and speech
+# runs ~250 tokens a turn, so this is roughly 400 turns of headroom — far past
+# any real conversation, but "far past" is not "cannot". On overflow the oldest
+# turns are dropped and the drop is logged, because evicting the front of the
+# transcript also invalidates every cache read after it and the cost profile
+# would otherwise change silently.
+MAX_TRANSCRIPT_TOKENS = int(os.environ.get("GLOSS_MAX_TRANSCRIPT_TOKENS", "100000"))
 # Anthropic only. 5m is the API default and a cache write does NOT refresh an
 # earlier breakpoint's clock, so a five-minute lull mid-conversation evicts the
 # prefix and the next turn pays full input price instead of a tenth of it. "1h"
@@ -258,7 +268,7 @@ if PROFILE.cache_breakpoint:
 else:
     SYSTEM_MESSAGE = SystemMessage(SYSTEM_PROMPT)
 
-transcript: deque[tuple[str, str]] = deque(maxlen=WINDOW_TURNS)
+transcript: list[tuple[str, str]] = []
 displays: set[websockets.ServerConnection] = set()
 _inflight: asyncio.Task | None = None
 _logged_cache_stats = False
@@ -274,21 +284,83 @@ async def broadcast(payload: dict) -> None:
     )
 
 
+ASK = "Cards for the final [interviewer] turn only."
+
+
+def evict_if_needed() -> None:
+    """Drop the oldest turns if the transcript outgrows its ceiling.
+
+    Oldest-first, because the newest turn is the one cards are about. Logged at
+    warning level rather than debug: this both loses conversation the tool was
+    built to remember *and* invalidates the cached prefix from that point on,
+    so the next turn is slower and dearer for a reason nothing else would show.
+    """
+    while transcript and providers.estimate_tokens(
+        "\n".join(t for _, t in transcript)
+    ) > MAX_TRANSCRIPT_TOKENS:
+        who, text = transcript.pop(0)
+        log.warning(
+            "Transcript over %d tokens — dropped oldest turn [%s] %.40s… "
+            "(cache prefix invalidated from here)",
+            MAX_TRANSCRIPT_TOKENS,
+            who,
+            text,
+        )
+
+
+def build_turn_message():
+    """The user half of the prompt, shaped so the conversation itself caches.
+
+    One content block per turn, appended and never re-merged, with the ASK in a
+    block of its own at the end. That shape is not stylistic — it is the only
+    one that caches, and two shapes that looked equivalent were measured
+    failing before this one:
+
+    * **ASK glued to the newest turn.** When that turn rolls into history on
+      the next request it no longer carries the suffix, so the bytes differ and
+      the prefix match dies at that point.
+    * **History re-joined into one growing block.** Turn N sends
+      `[history_N][newest_N]`; turn N+1 sends `[history_N + newest_N][newest]`.
+      The text is nearly identical and the *block structure* is not, and the
+      cache key covers structure.
+
+    Both failed the same way and it is a quiet failure: every lookup falls
+    through to the system breakpoint, so `cache_read` sits at exactly the
+    prefix size looking entirely healthy. The only thing that distinguishes
+    "caching the conversation" from "caching the prep pack and nothing else"
+    is whether that number *moves* as the conversation grows.
+
+    Breakpoints ride the last two turns. At turn N+1 the second-to-last block
+    is turn N, whose prefix is byte-identical to what turn N marked as its
+    last, so it hits. Older breakpoints are dropped rather than accumulated —
+    Anthropic allows four and the system prefix already holds one.
+    """
+    evict_if_needed()
+    if not transcript:
+        return HumanMessage(ASK)
+
+    if not PROFILE.cache_breakpoint:
+        history = "\n".join(f"[{who}] {text}" for who, text in transcript)
+        return HumanMessage(f"{history}\n\n{ASK}")
+
+    blocks: list[dict] = [
+        {"type": "text", "text": f"[{who}] {text}"} for who, text in transcript
+    ]
+    for block in blocks[-2:]:
+        block["cache_control"] = {"type": "ephemeral", "ttl": CACHE_TTL}
+    # Constant, and last on purpose: it sits after every breakpoint, so it
+    # never enters a cached prefix and never invalidates one.
+    blocks.append({"type": "text", "text": ASK})
+    return HumanMessage(content=blocks)
+
+
 async def enrich() -> None:
-    """One Tier 1 pass over the current transcript window."""
+    """One Tier 1 pass over the whole conversation so far."""
     global _logged_cache_stats
 
-    window = "\n".join(f"[{who}] {text}" for who, text in transcript)
     started = time.monotonic()
     try:
-        result = await llm.ainvoke(
-            [
-                SYSTEM_MESSAGE,
-                HumanMessage(
-                    f"{window}\n\nCards for the final [interviewer] turn only."
-                ),
-            ]
-        )
+        result = await llm.ainvoke([SYSTEM_MESSAGE, build_turn_message()])
         # Inside the try on purpose: a schema mismatch is a failure that has to
         # reach the screen like any other, not an exception that escapes into
         # the task and leaves the display showing a normal quiet turn.

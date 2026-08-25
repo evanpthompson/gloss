@@ -330,6 +330,40 @@ first, so LangChain is not surfacing Anthropic's cache-creation field under
 under a different key. `cache_read` is the counter that matters and it is
 correct; the write counter is cosmetic and unfixed.
 
+#### Measured 2026-08-24, claude-haiku-4-5, after S2 (per-turn blocks)
+
+With one content block per turn and breakpoints on the last two, the
+conversation itself caches and `cache_read` climbs with it:
+
+| turn | input | `cache_read` | cached share | latency |
+|---|---|---|---|---|
+| 3 | 7,417 | 7,038 | 94.9% | 1.62s |
+| 4 | 7,765 | 7,382 | 95.1% | 1.17s |
+| 5 | 8,114 | 7,730 | 95.3% | 1.12s |
+| 6 | 8,131 | 8,079 | **99.4%** | 1.74s |
+
+Latency is **1.1–1.7s, inside the 1–2s budget**, against 2.5–3.3s at S1. The
+budget miss recorded at S1 is resolved, though not purely by caching — the
+cards in this run were shorter (86–142 output tokens against 158–222), and
+output length drives latency more than input does.
+
+**The prompt shape is load-bearing, and two shapes that looked equivalent were
+measured failing first.** Prefix caching matches the exact serialised request,
+block boundaries included:
+
+* ASK glued to the newest turn — when that turn rolls into history it no longer
+  carries the suffix, so the bytes diverge at that point.
+* History re-joined into one growing block — turn N sends
+  `[history_N][newest_N]`, turn N+1 sends `[history_N + newest_N][newest]`. The
+  text is nearly identical; the block structure is not, and the cache key
+  covers structure.
+
+Both fail quietly: every lookup falls through to the system breakpoint, so
+`cache_read` sits at exactly the prefix size and looks healthy. The only signal
+that separates "caching the conversation" from "caching the prep pack alone" is
+whether that number *moves*. It sat flat at 5,933 across three separate
+experiments before the shape was right.
+
 For contrast, on gemini-3.6-flash a 5,168-token byte-identical prefix reported
 `cache_read=0` across four consecutive calls despite a documented 4,096 floor.
 LangChain surfaces the field there too, so that was Gemini not caching rather

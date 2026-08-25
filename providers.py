@@ -153,6 +153,22 @@ PROFILES: dict[str, Profile] = {
 }
 
 
+def estimate_tokens(text: str) -> int:
+    """Rough token count. Deliberately an estimate, deliberately conservative.
+
+    ~3.6 chars/token under-counts English prose slightly, so anything that
+    clears a floor by this measure has real margin rather than sitting exactly
+    on the line. An exact count needs a provider round-trip, which neither the
+    prep-pack gate nor a live turn can afford to wait for.
+
+    Lives here because the numbers it is compared against — `cache_min_tokens`
+    above, and the transcript ceiling in b_server — are all token-denominated,
+    and a second copy of this function in tools/check_pack.py was one more
+    thing that could drift.
+    """
+    return int(len(text) / 3.6)
+
+
 class ProfileError(SystemExit):
     """Refusal to start, with a reason and the thing that would change it."""
 
