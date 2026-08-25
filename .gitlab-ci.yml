@@ -17,13 +17,23 @@ test:
   image: ghcr.io/astral-sh/uv:python3.13-bookworm-slim
   variables:
     UV_CACHE_DIR: .uv-cache
+    # Inside the project directory so GitLab can cache it; the default lives in
+    # $HOME, which cache paths may not reach.
+    PLAYWRIGHT_BROWSERS_PATH: .playwright-browsers
+    # display.html is tested in a real browser. Locally a developer without one
+    # gets a skip; here a missing browser is a failure, because a check that
+    # could not run is not a pass and a silent skip in the environment that
+    # gates is indistinguishable from green.
+    GLOSS_REQUIRE_BROWSER_TESTS: "1"
   cache:
     key: "uv-$CI_COMMIT_REF_SLUG"
     paths:
       - .uv-cache
+      - .playwright-browsers
   script:
     - uv sync --frozen
     - uv run ruff check .
+    - uv run playwright install --with-deps chromium
     - uv run pytest --timeout=60
   rules:
     - if: '$CI_COMMIT_BRANCH'

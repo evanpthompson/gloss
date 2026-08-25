@@ -154,7 +154,7 @@ a question), `GLOSS_WINDOW_TURNS`.
 
 ```bash
 uv sync                       # dev dependencies included
-uv run pytest                 # 109 tests, ~10s
+uv run pytest                 # 132 tests, ~20s
 uv run ruff check .
 ```
 
@@ -164,6 +164,11 @@ tests run `b_server` against a local fake vendor that speaks both wire formats
 is a gate that gets skipped the first time it is inconvenient, and this one runs
 in CI where merges actually happen.
 
+The browser tests need Chromium (`uv run playwright install chromium`). Without
+it they skip locally — but in CI, where `GLOSS_REQUIRE_BROWSER_TESTS=1` is set,
+a missing browser fails the job instead. A check that could not run is not a
+pass.
+
 | file | layer | covers |
 |---|---|---|
 | `test_failures.py` | unit | every documented vendor error → its meaning |
@@ -172,6 +177,7 @@ in CI where merges actually happen.
 | `test_cards.py` | unit | the card contract, and what gets dropped |
 | `test_providers.py` | unit | the provider allow-list and its refusals |
 | `test_chain.py` | integration | the fallback chain through the real SDKs |
+| `test_display.py` | browser | card lifecycle in `display.html`, in real Chromium |
 
 The end-to-end audio pipe test lives in the separate `gloss-e2e` project; it
 needs two containers and a mocked Deepgram, and CI triggers it after this

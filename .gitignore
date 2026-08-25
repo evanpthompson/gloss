@@ -13,3 +13,4 @@ sessions/*
 !sessions/README.md
 !sessions/example/
 .idea/
+.playwright-browsers

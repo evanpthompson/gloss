@@ -460,9 +460,10 @@ values are not a display policy: the TTL rides on each card and the cap rides on
 the batch, so a second screen opened halfway through a call is configured by the
 first message it receives.
 
-**Not covered by the test suite.** `display.html` is the one part of gloss with
-no automated test — CI runs a Python-only image and adding a browser to it is a
-bigger change than this warranted. The browser verification above was manual.
+**Covered by `tests/test_display.py` as of the same day**, driving the real file
+in real Chromium. Both defects above were replanted afterwards to confirm the
+tests catch them: reverting to per-turn replacement failed 6 tests, and counting
+error cards against the cap failed the one that exists for it.
 
 ---
 

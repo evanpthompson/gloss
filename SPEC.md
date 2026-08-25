@@ -629,9 +629,13 @@ Neither value is a display policy. The TTL rides on each card and the cap rides
 on the batch, so a second screen opened halfway through a call is configured by
 the first message it receives, and two screens cannot disagree.
 
-`display.html` is the one part of gloss with no automated test: CI runs a
-Python-only image and adding a browser to it is a larger change than this
-warranted. Its behaviour was verified by hand against the DOM.
+`display.html` is covered by `tests/test_display.py`, which drives the real file
+in real Chromium rather than a stubbed DOM — the behaviour under test is DOM
+identity (is this the *same* node, in the same position?) and timer-driven
+expiry, and a stub would have tested the stub. Without a browser installed those
+tests skip locally; in CI `GLOSS_REQUIRE_BROWSER_TESTS=1` turns a missing
+browser into a failure, because a silent skip in the environment that gates is
+indistinguishable from green.
 
 - Utterances shorter than `GLOSS_MIN_CHARS` (default 25) never trigger a
   call — "mm-hm", "right", "yeah exactly" are turn-taking, not questions.
