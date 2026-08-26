@@ -1022,8 +1022,9 @@ standalone product.
 
 ## Open items / unresolved
 
-- Deepgram vs AssemblyAI not chosen (leaning Deepgram — endpointing
-  controls + keyterm prompting).
+- ~~Deepgram vs AssemblyAI not chosen.~~ **Resolved: Deepgram.** Keyterm
+  prompting is measurably load-bearing (§ Priming the recogniser), and nothing
+  since has given a reason to revisit it.
 - How the prep pack gets assembled per interview (manual copy / symlink /
   build step) — undefined.
 - Whether 3 display cards is the right number, or 1.
@@ -1031,13 +1032,33 @@ standalone product.
   no tunnel planned for v1.
 - **Registry cleanup policy not set up.** CI pushes a `:<short-sha>` tag on
   every run to both GitLab Container Registries (`gloss/b-server`,
-  `gloss-e2e/mock-deepgram`, `.../mock-listener`) alongside the
+  `gloss-e2e/mock-deepgram`, `.../mock-listener`, `.../mock-display`) alongside the
   moving `:main` cache tag, and nothing ever deletes old SHA tags — they
   accumulate indefinitely. Images are small so this isn't urgent, but
   GitLab has a built-in per-repository expiration policy (Settings → Packages
   and registries → Container registry → Cleanup policy — keep N most recent,
   expire tags older than X, regex to exclude `main`) that should get turned
   on for all three repositories at some point.
+
+### Cannot be verified without hardware
+
+Almost everything in this document is measured. These are the things that
+structurally cannot be, listed together so the gap is visible rather than
+scattered — none of them is blocked on code, and all of them fail in ways the
+test suite cannot see.
+
+- **Which keys the presenter clicker actually sends.** Phase 4a is tested with
+  synthetic key events in headless Chromium, so the *behaviour* is proven and
+  the *mapping* is not. Pair the device, focus `display.html`, press each
+  button. If a button emits something outside the map in § 4a, it is a one-line
+  addition. Deferred deliberately 2026-08-25.
+- **Two-laptop capture end to end.** The E2E suite proves the audio pipe with a
+  mock listener and a mock Deepgram; live runs have used recorded or synthetic
+  audio on one machine. Real WASAPI loopback on Laptop A, over the LAN, into
+  real Deepgram, has not been exercised by anything automated.
+- **Real end-to-end latency.** Every latency figure here is the enrichment call
+  measured at the server. Capture, network and STT are not in those numbers, and
+  the budget that matters to a person in a conversation includes all of them.
 
 ## Superseded work (do not revive)
 
