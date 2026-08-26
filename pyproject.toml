@@ -3,6 +3,8 @@ name = "gloss"
 version = "0.1.0"
 description = "Phase 1: two-laptop live audio pipe for real-time meeting comprehension"
 requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
 dependencies = [
     "deepgram-sdk>=7.7.0",
     "websockets>=14.0",

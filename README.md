@@ -260,3 +260,11 @@ project's own tests pass.
 
 See `SPEC.md` for the reasoning behind every design choice here, and for the
 things deliberately not built with the measurements that justified it.
+
+## License
+
+MIT — see `LICENSE`.
+
+The license covers this code. It does not extend to whatever you point
+`tools/build_kb.py` at: the glossary is built locally from books you supply,
+`kb/` is gitignored, and no book text is redistributed here.
