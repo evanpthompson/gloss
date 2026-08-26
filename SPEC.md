@@ -211,22 +211,64 @@ not the end of the call, cards that persist while their topic is live, a local
 glossary as the chain's floor, and an instant preview in front of it. Sessions
 S1–S6 and their measured results are in `PHASE-3-PLAN.md`.
 
-**Phase 4 — HUD mode and a hardware control. Not built; specced
-2026-08-25 so the constraints are recorded before someone builds it.**
+**Phase 4 — HUD mode and a hardware control.** 4a (clicker control) built
+2026-08-25. 4b (HUD mode) specced but not built, with its constraints recorded
+below so they are not rediscovered.
 
-Two related pieces, one of which is straightforward and one of which is not.
+Two related pieces. The first was straightforward and is done; the second is
+not, and is written down rather than started.
 
-#### 4a. Hardware control — straightforward
+#### 4a. Hardware control — built 2026-08-25
 
-A Bluetooth presenter clicker as a card controller: next, dismiss, pin. During
-a call, reaching for a keyboard is more disruptive than the glance itself, and a
-presenter remote is already an HID device that pairs with anything.
+A Bluetooth presenter clicker as a card controller. During a call, reaching for
+a keyboard is more disruptive than the glance itself.
 
-Fits the existing shape: the display is a websocket client, so a small local
-process reads the HID events and sends control messages on the same socket the
-server broadcasts on. No new transport. Pin in particular is the useful one —
-it holds a card past its TTL when a topic is still live but the model has moved
+**No local process, contrary to what this section originally said.** A presenter
+is an HID keyboard — it sends PageUp/PageDown or the arrow keys and usually one
+"blank screen" key. `display.html` listens for `keydown`, which is all a clicker
+was ever going to produce. No new transport, no OS permissions, nothing to
+install.
+
+| key | effect |
+|---|---|
+| `→` `PageDown` `space` | select next card |
+| `←` `PageUp` | select previous card |
+| `Enter` `p` | pin / unpin the selected card |
+| `Backspace` `Delete` `x` | dismiss the selected card |
+| `b` `.` `F5` | blank / unblank the whole display |
+| `Esc` | clear the selection |
+
+Presenters disagree about what they emit, so several keys map to each action.
+The first press selects the newest card, which is the one most likely to be
+acted on.
+
+**Pin is the load-bearing one.** A topic stays live after the model has moved on
+to something else, and the card would otherwise clear itself on its TTL. A
+pinned card ignores its TTL and every refresh of it — a pin that came undone
+because the server sent the same card again would be worse than no pin.
+
+**Blank is the second most useful and was not in the original sketch.** Someone
+walks up; one button and the screen is empty. It hides rather than pauses:
+timers keep running, so unblanking does not reveal a conversation that has moved
 on.
+
+**The cap stays absolute.** Pinned cards are evicted last, but a screen that
+grows without limit stops being readable, which is the one thing it cannot
+afford to be. Pinning everything is a choice to fill the screen, not a way to
+make it bigger.
+
+One bug worth recording because it was caught by a test rather than by reading:
+preferring unpinned cards for eviction isolated the card that had *just
+arrived* when everything else was pinned, so a fully pinned screen silently
+stopped showing anything new — fine-looking and stale. Eviction now never
+removes a card from the batch being rendered.
+
+**The limitation.** This works because the display is a dedicated second screen
+with nothing else focused. On a machine where the video call has focus, the keys
+go to the call instead. That case needs a real global-hotkey listener — an
+accessibility permission on macOS — and is deliberately not built: the dedicated
+second screen is the documented setup, and a keystroke that lands in someone
+else's video call is a worse failure than a feature that is absent.
 
 #### 4b. HUD mode — glanceable, not readable
 

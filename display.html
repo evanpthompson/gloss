@@ -34,6 +34,15 @@
   /* Cards expire rather than being cleared, so they need a way out that does
      not snap. Removal is the only motion on an otherwise still screen. */
   .card.out { opacity: 0; transition: opacity 220ms ease-in; }
+  /* Selection is what a clicker acts on, so it has to be findable in a glance
+     without becoming the loudest thing on screen. The border thickens; nothing
+     moves, because movement is what the card lifecycle exists to avoid. */
+  .card.sel { border-left-width: 10px; }
+  /* A pinned card outlives its TTL, so the screen has to say which ones will
+     not clear themselves — otherwise the display slowly fills for no visible
+     reason. */
+  .card.pin .tag::after { content: " · pinned"; opacity: 0.75; }
+  #cards.blank { visibility: hidden; }
   /* Empty is the normal state, not an error — most turns produce no cards. */
   #idle { color: var(--dim); font-size: clamp(13px, 1.3vw, 18px); text-align: center; }
   #status { font-size: 12px; color: var(--dim); display: flex; gap: 0.6em; align-items: center; }
@@ -63,7 +72,76 @@
   // Lifecycle is not a local policy: the TTL arrives on each card and the cap
   // arrives with the batch, so a second screen opened halfway through a call is
   // configured by the first message it receives.
-  const live = new Map();   // id -> { el, timer, touched }
+  const live = new Map();   // id -> { el, timer, touched, kind, pinned }
+
+  // --- clicker control (Phase 4a) -----------------------------------------
+  //
+  // A Bluetooth presenter is an HID keyboard: it sends PageUp/PageDown or the
+  // arrow keys, and usually one "blank screen" key. So there is no local
+  // process and no new transport — this page listens for keydown, which is all
+  // a clicker was ever going to produce.
+  //
+  // That works because the display is a dedicated second screen with nothing
+  // else focused. On a machine where the video call has focus, the keys go to
+  // the call instead; see SPEC.md § 4a for that case, which needs a real
+  // global-hotkey listener and is deliberately not built here.
+  let selected = null;      // id the clicker acts on
+  let blanked = false;
+
+  const order = () => [...live.keys()];
+
+  function select(id) {
+    for (const [key, entry] of live) entry.el.classList.toggle("sel", key === id);
+    selected = live.has(id) ? id : null;
+  }
+
+  function step(delta) {
+    const ids = order();
+    if (!ids.length) return;
+    const at = ids.indexOf(selected);
+    // No selection yet: start at the newest, which is the card most likely to
+    // be the one being acted on.
+    select(ids[at === -1 ? ids.length - 1 : (at + delta + ids.length) % ids.length]);
+  }
+
+  function togglePin(id = selected) {
+    const entry = live.get(id);
+    if (!entry) return;
+    entry.pinned = !entry.pinned;
+    entry.el.classList.toggle("pin", entry.pinned);
+    clearTimeout(entry.timer);
+    if (!entry.pinned) entry.timer = setTimeout(() => remove(id), (entry.ttl ?? 90) * 1000);
+  }
+
+  function dismiss(id = selected) {
+    if (!live.has(id)) return;
+    const ids = order();
+    const next = ids[(ids.indexOf(id) + 1) % ids.length];
+    remove(id);
+    select(next === id ? null : next);
+  }
+
+  function toggleBlank() {
+    blanked = !blanked;
+    cards.classList.toggle("blank", blanked);
+  }
+
+  // Generous key mapping, because presenters disagree about what they send.
+  const KEYS = {
+    ArrowRight: () => step(1),   PageDown: () => step(1),   " ": () => step(1),
+    ArrowLeft: () => step(-1),   PageUp: () => step(-1),
+    Enter: () => togglePin(),    p: () => togglePin(),
+    Backspace: () => dismiss(),  Delete: () => dismiss(),   x: () => dismiss(),
+    b: () => toggleBlank(),      ".": () => toggleBlank(),  F5: () => toggleBlank(),
+    Escape: () => select(null),
+  };
+
+  document.addEventListener("keydown", (e) => {
+    const act = KEYS[e.key];
+    if (!act) return;
+    e.preventDefault();   // or PageDown scrolls the page out from under the cards
+    act();
+  });
 
   const showIdle = () => {
     if (live.size === 0 && !document.getElementById("idle"))
@@ -75,6 +153,7 @@
     const entry = live.get(id);
     if (!entry) return;
     clearTimeout(entry.timer);
+    if (selected === id) selected = null;  // never point at a card that is gone
     live.delete(id);                       // freed immediately, so the same
     entry.el.classList.add("out");         // topic returning mid-fade gets a
     setTimeout(() => entry.el.remove(), 220);  // fresh element, not this one
@@ -107,8 +186,11 @@
         live.set(id, entry);
       }
       entry.kind = c.kind;
+      entry.ttl = c.ttl ?? 90;
       entry.touched = Date.now();
-      entry.timer = setTimeout(() => remove(id), (c.ttl ?? 90) * 1000);
+      // A pinned card has been held on purpose. It ignores its TTL and every
+      // refresh of it, until it is unpinned or dismissed.
+      if (!entry.pinned) entry.timer = setTimeout(() => remove(id), entry.ttl * 1000);
     }
     // Evict by least-recently-mentioned rather than oldest-created: a topic the
     // conversation keeps returning to should outlive a one-off from earlier.
@@ -118,11 +200,25 @@
     // first version of this let a transient outage evict a real card — which
     // then never came back, because the card that displaced it expired into
     // nothing. A twenty-second error must not cost a topic permanently.
-    const content = () => [...live.entries()].filter(([, e]) => e.kind !== "error");
-    while (content().length > (max ?? 3)) {
-      let stalest = null;
-      for (const [id, e] of content())
-        if (!stalest || e.touched < live.get(stalest).touched) stalest = id;
+    // Never evict what just arrived. Filtering to unpinned first would isolate
+    // exactly that card when everything else is pinned, so a screen full of
+    // pins silently stopped showing anything new — fine-looking and stale,
+    // which is the failure this display cannot afford.
+    const arrived = new Set(list.map((c) => c.id || c.label));
+    const content = () =>
+      [...live.entries()].filter(([id, e]) => e.kind !== "error" && !arrived.has(id));
+    const visible = () => [...live.values()].filter((e) => e.kind !== "error").length;
+
+    while (visible() > (max ?? 3) && content().length) {
+      // Pinned cards go last, but the cap is absolute: a screen that grows
+      // without limit stops being readable. Pinning everything is a choice to
+      // fill the screen, not a way to make it bigger.
+      const pool = content();
+      const preferred = pool.filter(([, e]) => !e.pinned);
+      const from = preferred.length ? preferred : pool;
+      let stalest = from[0][0];
+      for (const [id, e] of from)
+        if (e.touched < live.get(stalest).touched) stalest = id;
       remove(stalest);
     }
   }
@@ -130,6 +226,7 @@
   function wipe() {
     for (const entry of live.values()) clearTimeout(entry.timer);
     live.clear();
+    selected = null;
     cards.innerHTML = '<div id="idle">listening</div>';
   }
 

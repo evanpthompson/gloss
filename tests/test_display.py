@@ -129,6 +129,27 @@ class Display:
             f".findIndex(e => e.dataset.probe === '{mark}')"
         )
 
+    def key(self, name: str) -> None:
+        """A presenter clicker is an HID keyboard; this is what it sends."""
+        self.page.keyboard.press(name)
+
+    @property
+    def selected(self) -> str | None:
+        return self.page.evaluate(
+            "() => document.querySelector('.card.sel')?.querySelector('.label').textContent ?? null"
+        )
+
+    @property
+    def pinned(self) -> list[str]:
+        return self.page.evaluate(
+            "() => [...document.querySelectorAll('.card.pin')]"
+            ".map(e => e.querySelector('.label').textContent)"
+        )
+
+    @property
+    def blanked(self) -> bool:
+        return self.page.evaluate("() => document.getElementById('cards').classList.contains('blank')")
+
     @property
     def idle(self) -> str | None:
         return self.page.evaluate("() => document.getElementById('idle')?.textContent ?? null")
@@ -351,3 +372,182 @@ def test_a_confirmed_preview_is_updated_not_duplicated(page: Display) -> None:
     assert page.labels == ["Kestrel"]
     assert page.stamped("preview"), "the model's card replaced the node instead of updating it"
     assert page.detail("Kestrel") == "Their gate; they raised it twice."
+
+
+# --- clicker control (Phase 4a) ---------------------------------------------
+#
+# A Bluetooth presenter is an HID keyboard, so these drive real key events
+# rather than calling the handlers. That is the whole reason 4a needs no local
+# process: the clicker produces exactly what these tests produce.
+
+
+def three(page: Display) -> None:
+    for i, label in enumerate(("Kestrel", "BM25", "A2DP")):
+        page.turn(card(f"t{i}", label))
+        page.wait(15)
+
+
+def test_the_first_press_selects_the_newest_card(page: Display) -> None:
+    """Nothing is selected until the clicker is used, and the newest card is
+    the one most likely to be the one being acted on."""
+    three(page)
+    assert page.selected is None
+    page.key("ArrowRight")
+    assert page.selected == "A2DP"
+
+
+def test_selection_cycles_and_wraps(page: Display) -> None:
+    three(page)
+    page.key("ArrowRight")                      # A2DP (newest)
+    page.key("ArrowRight")
+    assert page.selected == "Kestrel", "did not wrap to the start"
+    page.key("ArrowLeft")
+    assert page.selected == "A2DP"
+
+
+def test_the_keys_a_presenter_actually_sends(page: Display) -> None:
+    """Presenters disagree about what they emit; PageDown/PageUp are as common
+    as the arrows."""
+    three(page)
+    page.key("PageDown")
+    first = page.selected
+    page.key("PageUp")
+    page.key("PageDown")
+    assert page.selected == first
+
+
+def test_escape_clears_the_selection(page: Display) -> None:
+    three(page)
+    page.key("ArrowRight")
+    assert page.selected is not None
+    page.key("Escape")
+    assert page.selected is None
+
+
+# --- pin --------------------------------------------------------------------
+
+
+def test_a_pinned_card_outlives_its_ttl(page: Display) -> None:
+    """The point of the feature: a topic is still live but the model has moved
+    on, and the card would otherwise clear itself."""
+    page.turn(card("kestrel", "Kestrel", ttl=0.3))
+    page.key("ArrowRight")
+    page.key("Enter")
+    assert page.pinned == ["Kestrel"]
+    page.wait(700)
+    assert page.labels == ["Kestrel"], "the pinned card expired anyway"
+
+
+def test_unpinning_restores_the_clock(page: Display) -> None:
+    page.turn(card("kestrel", "Kestrel", ttl=0.3))
+    page.key("ArrowRight")
+    page.key("Enter")           # pin
+    page.wait(500)
+    page.key("Enter")           # unpin — the TTL starts again from here
+    assert page.pinned == []
+    page.wait(700)
+    assert page.labels == []
+
+
+def test_a_refreshed_pin_still_ignores_its_ttl(page: Display) -> None:
+    """The server keeps sending the card while the topic recurs. A pin has to
+    survive those updates, or it would silently come undone."""
+    page.turn(card("kestrel", "Kestrel", ttl=0.3))
+    page.key("ArrowRight")
+    page.key("Enter")
+    page.turn(card("kestrel", "Kestrel", "updated detail", ttl=0.3))
+    page.wait(700)
+    assert page.labels == ["Kestrel"]
+    assert page.detail("Kestrel") == "updated detail"
+
+
+def test_p_pins_too(page: Display) -> None:
+    page.turn(card("kestrel", "Kestrel"))
+    page.key("ArrowRight")
+    page.key("p")
+    assert page.pinned == ["Kestrel"]
+
+
+# --- dismiss ----------------------------------------------------------------
+
+
+def test_dismiss_removes_the_selected_card(page: Display) -> None:
+    three(page)
+    page.key("ArrowRight")          # A2DP
+    page.key("Backspace")
+    page.settle()
+    assert "A2DP" not in page.labels
+    assert len(page.labels) == 2
+
+
+def test_dismiss_moves_the_selection_on(page: Display) -> None:
+    """Otherwise the next press acts on nothing and the clicker feels dead."""
+    three(page)
+    page.key("ArrowRight")
+    page.key("Backspace")
+    page.settle()
+    assert page.selected is not None
+
+
+def test_a_dismissed_card_is_gone_even_if_pinned(page: Display) -> None:
+    page.turn(card("kestrel", "Kestrel"))
+    page.key("ArrowRight")
+    page.key("Enter")               # pin
+    page.key("x")                   # dismiss
+    page.settle()
+    assert page.labels == []
+
+
+# --- blank ------------------------------------------------------------------
+
+
+def test_blank_hides_everything_and_restores_it(page: Display) -> None:
+    """Someone walks up. One button, nothing on screen, state kept."""
+    three(page)
+    page.key("b")
+    assert page.blanked
+    page.key("b")
+    assert not page.blanked
+    assert len(page.labels) == 3, "blanking lost the cards"
+
+
+def test_blanking_does_not_stop_the_clock(page: Display) -> None:
+    """A blanked screen is hidden, not paused — otherwise unblanking shows a
+    conversation that has moved on."""
+    page.turn(card("kestrel", "Kestrel", ttl=0.3))
+    page.key("b")
+    page.wait(700)
+    page.key("b")
+    assert page.labels == []
+
+
+# --- pinning and the cap ----------------------------------------------------
+
+
+def test_the_cap_evicts_an_unpinned_card_first(page: Display) -> None:
+    three(page)
+    page.key("ArrowRight")          # A2DP, the newest
+    page.key("ArrowRight")          # wrap to Kestrel, the stalest
+    page.key("Enter")               # pin the stalest
+    assert page.pinned == ["Kestrel"]
+
+    page.turn(card("new", "Service mesh"), max_cards=3)
+    page.settle()
+    assert "Kestrel" in page.labels, "the pinned card was evicted first"
+    assert len(page.labels) == 3
+
+
+def test_the_cap_is_absolute_even_when_everything_is_pinned(page: Display) -> None:
+    """Pinning everything is a choice to fill the screen, not a way to make it
+    bigger. A display that grows without limit stops being readable, which is
+    the one thing it cannot afford to be."""
+    three(page)
+    for _ in range(3):
+        page.key("ArrowRight")
+        page.key("Enter")
+    assert len(page.pinned) == 3
+
+    page.turn(card("new", "Service mesh"), max_cards=3)
+    page.settle()
+    assert len(page.labels) == 3
+    assert "Service mesh" in page.labels

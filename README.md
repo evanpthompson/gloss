@@ -168,12 +168,30 @@ that are not ours to redistribute.
 Without it, the `local` link is dropped with a warning and the chain runs on
 its vendors alone.
 
+## Clicker control
+
+A Bluetooth presenter clicker drives the display — it is an HID keyboard, so
+`display.html` just listens for the keys it sends. Nothing to install.
+
+| key | effect |
+|---|---|
+| `→` `PageDown` `space` | select next card |
+| `←` `PageUp` | select previous card |
+| `Enter` `p` | pin / unpin (a pinned card ignores its TTL) |
+| `Backspace` `Delete` `x` | dismiss |
+| `b` `.` `F5` | blank / unblank the screen |
+| `Esc` | clear selection |
+
+Requires the display to have keyboard focus, which it does on a dedicated
+second screen. On a machine where the video call is focused, the keys go to the
+call instead.
+
 ## Tests
 
 
 ```bash
 uv sync                       # dev dependencies included
-uv run pytest                 # 179 tests, ~25s
+uv run pytest                 # 194 tests, ~30s
 uv run ruff check .
 ```
 
