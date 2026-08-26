@@ -6,10 +6,15 @@ notes you wrote before the call, matched to what was just said, and a flag on
 any term you don't recognize. It does not answer for you — see `SPEC.md`
 §Name for why it isn't called what it used to be called.
 
-**Phase 1 — the pipe.** Audio captured on Laptop A (Windows, hosts the call)
-arrives on Laptop B (this Mac) as two correctly-labeled live transcript
-streams. Nothing else — no enrichment, no display, no LLM calls. See
-`SPEC.md` for the full design and what Phase 2/3 add later.
+**Status as of 2026-08-25.** Phases 1–3 are complete and Phase 4a is built:
+audio pipe, turn-end enrichment with cards on a second screen, prompt caching,
+a three-link provider chain ending in a local glossary, cards that persist while
+their topic is live, and a presenter clicker to drive them. Phase 4b (HUD mode)
+is specced and not built. 194 tests gate all of it in CI.
+
+`SPEC.md` carries the design and every measurement behind it, including the
+things deliberately **not** built and the data that justified not building them.
+`PHASE-3-PLAN.md` has the session-by-session record.
 
 ## Setup
 
@@ -72,24 +77,36 @@ with an elapsed-time marker so you can eyeball end-to-end latency:
 
 Cards on a second screen, driven by the interviewer's end-of-turn.
 
-**0. Pick a provider.** Defaults to Gemini — get a key at
-[aistudio.google.com/apikey](https://aistudio.google.com/apikey) and put it in
-`.env` as `GEMINI_API_KEY`.
+**0. Pick a provider.** Defaults to **Anthropic** (`claude-haiku-4-5`) with
+DeepSeek and the local glossary behind it — get a key at
+[console.anthropic.com](https://console.anthropic.com/settings/keys) and put it
+in `.env` as `ANTHROPIC_API_KEY`. `DEEPSEEK_API_KEY` is required too unless you
+set `GLOSS_FALLBACKS=` empty: an unproven fallback is one you discover during
+the outage it exists for, so the server refuses to start without it.
 
-> **The Gemini free tier will not run this.** Measured 2026-08-23:
-> `gemini-3.6-flash` free tier is **20 requests per day**
-> (`GenerateRequestsPerDayPerProjectPerModel-FreeTier`). This design budgets
-> ~15–25 calls *per hour*, so one conversation exhausts a day. Enable billing
-> on the API project, or use a provider below. Past the quota you get an
-> "Enrichment is down" card on every turn — which is at least visible, but the
-> screen is then useless for the rest of the call.
+Every provider is one row in `providers.py` — model id, kwargs, key variable and
+cache floor together, so they cannot drift apart. An unlisted provider is
+refused rather than attempted.
 
-Any LangChain provider works; swapping is two env vars plus that provider's
-package:
+> **Historical, kept because it explains the default.** gloss ran on Gemini
+> until 2026-08-24. Measured 2026-08-23: the `gemini-3.6-flash` free tier is
+> **20 requests per day**, against a design that budgets ~15–25 calls *per
+> hour* — one conversation exhausts a day. Chasing a free tier was dropped as a
+> goal at that point; a paid primary at pennies an hour is the cheaper answer
+> once your own time is counted. `google_genai` still works and is unmaintained.
+
+**Providers are an allow-list, not a free-text setting.** Each is one row in
+`providers.py`, and an unlisted one is refused at startup rather than attempted
+— "unrecognised" and "unsupported" are the same thing from a live conversation's
+point of view, and the failure would otherwise land mid-call. Adding one means
+adding a row with its model id, kwargs, key variable and cache floor looked up:
 
 ```
-GLOSS_PROVIDER=anthropic GLOSS_MODEL=claude-haiku-4-5   # uv add langchain-anthropic
-GLOSS_PROVIDER=ollama    GLOSS_MODEL=llama3.1           # uv add langchain-ollama, no quota, local
+GLOSS_PROVIDER=anthropic      # default — claude-haiku-4-5, cache breakpoint, floor 4096
+GLOSS_PROVIDER=deepseek       # deepseek-v4-flash, implicit caching, floor 128 (measured)
+GLOSS_PROVIDER=local          # the offline glossary; no model, no network, no tokens
+GLOSS_PROVIDER=ollama         # llama3.2, nothing leaves the machine
+GLOSS_PROVIDER=fake           # canned cards, mocked E2E suite only
 ```
 
 A failing call now fails fast rather than retrying: `GLOSS_MAX_RETRIES=1` and
@@ -141,14 +158,18 @@ Tokens: in=2140 out=64 cache_read=0
 minimum prefix size and each turn reprocesses the whole thing — see
 `sessions/README.md`.
 
-A red **"Enrichment is down"** card means the call failed. That card exists
-because zero cards is the *normal* state here, so a silent failure would be
-invisible for the rest of the conversation.
+A red card means the call failed, and it **names the reason** — "Provider out
+of credit", "API key rejected", "Model provider overloaded" — because someone
+glancing at a second screen mid-conversation can act on those and cannot act on
+an exception class. That card exists at all because zero cards is the *normal*
+state here, so a silent failure would be invisible for the rest of the call.
 
-**Tuning** (all optional, all in `.env.example`): `GLOSS_PROVIDER`,
-`GLOSS_MODEL`, `GLOSS_MODEL_KWARGS`, `GLOSS_MAX_CARDS`, `GLOSS_MIN_CHARS` (how
-short an interviewer turn has to be before it counts as turn-taking rather than
-a question), `GLOSS_WINDOW_TURNS`.
+**Tuning** (all optional, all documented in `.env.example`): `GLOSS_PROVIDER`,
+`GLOSS_FALLBACKS`, `GLOSS_MODEL`, `GLOSS_MODEL_KWARGS`, `GLOSS_MAX_CARDS`,
+`GLOSS_MIN_CHARS` (how short an interviewer turn has to be before it counts as
+turn-taking rather than a question), `GLOSS_MAX_TRANSCRIPT_TOKENS`,
+`GLOSS_CARD_TTL_S`, `GLOSS_ERROR_TTL_S`, `GLOSS_PREVIEW`, `GLOSS_KB`,
+`GLOSS_KEYTERM_BUDGET`, `GLOSS_CACHE_TTL`, `GLOSS_LOG_CACHE`.
 
 ## Local knowledge base (optional)
 
@@ -222,8 +243,20 @@ The end-to-end audio pipe test lives in the separate `gloss-e2e` project; it
 needs two containers and a mocked Deepgram, and CI triggers it after this
 project's own tests pass.
 
-## Next (deferred, not built yet)
+## Next (not built)
 
-- Tier 2 post-call research export (Phase 3)
+- **Phase 4b — HUD mode.** Cards as a heads-up surface rather than a second
+  screen: meaning carried by form and position before any word is read, and
+  ultimately a transparent overlay. Specced in `SPEC.md` § 4b, with the reading
+  research that constrains it and a test to run before writing any code.
+- **Recall cards from the prep pack when every vendor is out.** The local
+  glossary serves `jargon` only, so a total outage leaves the notes written for
+  that specific call unreachable — which is backwards. Small: the pack is
+  already loaded at startup and `kb.Glossary` has the lookup shape to copy.
+- **Tier 2 post-call research export.** Unchanged from the original plan and
+  still not started.
+- **Physical verification.** Clicker keycodes, two-laptop capture, real
+  end-to-end latency — `SPEC.md` § "Cannot be verified without hardware".
 
-See `SPEC.md` for the reasoning behind every design choice here.
+See `SPEC.md` for the reasoning behind every design choice here, and for the
+things deliberately not built with the measurements that justified it.

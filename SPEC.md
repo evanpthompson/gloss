@@ -142,28 +142,43 @@ during it.
 
 ## Display
 
-Three cards maximum, newest pinned to the top so the eye lands in the same
-place every time, older cards fading after ~90 seconds. No transcript.
+Three content cards maximum, each clearing itself ~90 seconds after the last
+turn that raised its topic. No transcript.
+
+New topics **append**; a topic already on screen updates **in place**, keeping
+its position, so the eye does not have to re-find a card it has already located.
+(The original sketch pinned the newest to the top; per-card stable position
+turned out to serve the same goal better — see § Card lifecycle.)
 
 ```
 ┌────────────────────────────────────┐
-│ ▸ Story 5 — integration platform   │  from prep pack, instant
-│   Camel/MuleSoft buy-vs-build      │
+│ your notes                         │
+│ Integration platform               │  recall — quoted from the prep pack
+│ Camel/MuleSoft buy-vs-build        │
 ├────────────────────────────────────┤
-│ ▸ GRIFFON                          │  jargon flag, unresolved
-│   unfamiliar — ask them            │
+│ unfamiliar term                    │
+│ GRIFFON                            │  jargon — define it, don't answer it
+│ their internal deploy gate         │
 └────────────────────────────────────┘
 ```
 
-Card schema from Tier 1:
+**The card contract is defined once, in `cards.py`, as a pydantic model.** The
+JSON schema sent to the provider is derived from it and the same model validates
+what comes back, so there is nothing to keep in sync — and this document is not
+the source of truth for it. As of 2026-08-25:
 
 ```json
 {"cards": [{
-  "kind": "story | term | fact | question",
-  "label": "≤ 7 words",
-  "detail": "≤ 20 words"
+  "id":     "kestrel",              // topic slug; optional, derived from label
+  "kind":   "recall | jargon",      // `error` is server-authored, never a model's
+  "label":  "≤ 6 words",
+  "detail": "≤ 25 words"
 }]}
 ```
+
+On the wire to the display each card also carries `ttl` (seconds), and the
+batch carries `max` — so lifecycle is the server's policy and a display opened
+mid-call is configured by the first message it receives.
 
 Phase 4 § HUD mode revisits this display as a heads-up surface rather than a
 second screen — form and position carrying meaning before any word is read, and
