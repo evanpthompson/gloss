@@ -199,6 +199,72 @@ so the pipe is provable before signing up for anything?
 **Phase 2 — Tier 1 enrichment.** Turn-end trigger → LLM + prep pack →
 at most 3 cards → `display.html`. Specced in detail below.
 
+**Phase 3 — make it survive a real call. Complete 2026-08-25.** Caching so cost
+does not grow with the conversation, a provider chain so one vendor being out is
+not the end of the call, cards that persist while their topic is live, a local
+glossary as the chain's floor, and an instant preview in front of it. Sessions
+S1–S6 and their measured results are in `PHASE-3-PLAN.md`.
+
+**Phase 4 — teleprompter cards and a hardware control. Not built; specced
+2026-08-25 so the constraints are recorded before someone builds it.**
+
+Two related pieces, one of which is straightforward and one of which is not.
+
+#### 4a. Hardware control — straightforward
+
+A Bluetooth presenter clicker as a card controller: next, dismiss, pin. During
+a call, reaching for a keyboard is more disruptive than the glance itself, and a
+presenter remote is already an HID device that pairs with anything.
+
+Fits the existing shape: the display is a websocket client, so a small local
+process reads the HID events and sends control messages on the same socket the
+server broadcasts on. No new transport. Pin in particular is the useful one —
+it holds a card past its TTL when a topic is still live but the model has moved
+on.
+
+#### 4b. Teleprompter cards — specced with the constraints stated
+
+**Goal:** read a card without the eye traversing it. Text moves horizontally (or
+advances word-by-word in place) so gaze stays on one point, in the manner of a
+teleprompter, rather than scanning left to right.
+
+**What is known before building, so it is not rediscovered:**
+
+- **Moving text is harder to read than static text.** Marquee-style horizontal
+  scrolling measurably degrades comprehension. The better-studied variant is
+  RSVP — one word at a time in a fixed position — which preserves reading speed
+  but removes the ability to re-read. Re-reading is what a one-second glance
+  depends on, so RSVP trades away the thing that makes a card work.
+- **A card is already close to one fixation.** The `label` budget is six words.
+  There is not much traversal left to remove, which caps the available benefit.
+- **Cards already hold position.** The Phase 3 card lifecycle updates a card in
+  place rather than tearing the list down, so the eye does not have to re-find
+  a card it has already located. That was the larger source of eye movement and
+  it is gone.
+- **Gaze direction, not saccade pattern, is what reads as "reading."** On a
+  video call the visible signal is the eyes being off-camera and for how long,
+  plus head angle. A fixed stare at an off-axis point for two seconds is not
+  obviously less visible than a quick scan of the same text.
+
+**Therefore: measure before building.** The claim that this reduces glance time
+is testable — put a stopwatch on comprehension of the same card, static versus
+scrolling, at the card's real size and distance. If static wins, as the reading
+literature suggests it will, 4b is not worth building and 4a still is.
+
+**Cheaper levers on the same goal**, if the aim is a shorter glance: shorter
+labels, higher contrast, and a fixed card position. All three are free and none
+of them fight how reading works.
+
+**One thing this changes about the product, recorded because § Name records the
+opposite decision.** The tool was deliberately renamed off "interview-copilot"
+because that name sounded like something to hide, and § Name states that
+interviews are one use case rather than the category. A feature whose purpose is
+to make assistance less visible to the other party moves that position. Framed
+as a teleprompter — reading while holding eye contact, which is an ordinary
+presentation skill — it does not; framed as anti-detection, it does. Worth
+deciding which it is before building, because it determines whether this belongs
+in a public repository.
+
 ### Phase 2 design
 
 **Trigger: `speech_final` on the interviewer channel only.** The user's own
@@ -339,6 +405,102 @@ cost budget without being sayable:
 Nova-3 caps keyterms at 500 tokens per request and errors above that, so the
 list fills in rank order to a conservative default of 400 and the overflow is
 logged rather than dropped quietly.
+
+
+#### Measured 2026-08-25, two real recorded interviews (91 minutes)
+
+The synthetic-audio result above says priming works. Real interview audio says
+**it works when the pack's terms actually come up, and is not free when they do
+not.**
+
+Two of Evan's own recorded screens, run through Nova-3 twice each — once bare,
+once primed with a plausible pack vocabulary for the first call.
+
+| | recruiter screen, 22 min | technical, 69 min |
+|---|---|---|
+| terms in the pack that appeared | most | few |
+| real fixes from priming | **6** | 1 (casing) |
+| regressions from priming | 0 | 2 |
+| residual homophone errors | 0 | 0 |
+
+On the first call priming recovered the employer name three times, including one
+place the bare run produced **"our solutions"** — not a mishearing of the name
+so much as its absence. `Rx State` → `RX Savings`, `Bodo` → `boto`,
+`fast API` → `FastAPI`, `Firemon` → `FireMon`.
+
+On the second call the same vocabulary was largely irrelevant to what was
+discussed, and priming produced one casing fix, two regressions (`auth` → `off`,
+`React` → `react`) and one sentence that exists in no other run:
+*"I can listen to radio on my socks."*
+
+**Half of that difference was not priming at all.** Two *identical* unprimed
+passes over the same audio differ in 8 places — all punctuation and filler
+(`"And so"`/`"So"`, `"things, and"`/`"things. And"`). Nova-3 is not
+deterministic, and any before/after comparison that skips this control is
+measuring noise. The primed run's 17 differences net out to roughly 9 real ones.
+
+**What follows from it:** keep prep packs targeted at the specific call.
+`keyterms.py` already extracts from *that call's* pack rather than a standing
+vocabulary, which is the right shape — but a stale or generic pack can make
+transcription slightly worse, and nothing currently warns about that.
+
+#### Homophone correction — measured, NOT BUILT 2026-08-25
+
+Nova-3 transcribed a synthetic "GRIFFON" as "griffin", and priming did not fix
+it. That looked like a gap worth closing: a term the recogniser gets confidently
+wrong is a term no later stage can recover, because everything downstream
+matches on exact strings.
+
+**It was not built, because on real audio the failure does not occur.** 91
+minutes of recorded interviews, through Nova-3 with priming, produced **zero**
+residual homophone errors of that kind. The remaining mistakes were `EC two` for
+`EC2` — letter/digit rendering, which no homophone map addresses.
+
+**The premise came from the wrong transcript.** The failures that motivated this
+were Plaud's, not Deepgram's. Plaud rendered the same audio as "jot token" for
+JWT, "a docker or PDF file" for DOCX, and the employer name three different
+wrong ways. Nova-3 got `JWT` and `RX Savings` right *unprimed*. gloss does not
+read Plaud's transcripts, so those failures are not gloss's failures.
+
+Three designs were built or tested on the way, and the reasoning is worth
+keeping because the first two look plausible:
+
+1. **Confidence gating** — only correct words the recogniser was unsure about.
+   **Dead.** Measured per-word confidences on the failing clip: the wrong word
+   (`griffin`) came back at **0.942**, higher than four words it got right,
+   while correct words `hfp` (0.830) and `loopback` (0.862) scored lower. A
+   homophone is acoustically unambiguous by construction — the recogniser heard
+   exactly what was said and picked a real word. Confidence measures acoustic
+   certainty, not lexical correctness, and for this failure the two are
+   anti-correlated.
+
+2. **Backward fuzzy matching** — heard word searched against the vocabulary
+   phonetically. **Dead.** Soundex alone matched 19 of 115 common English words
+   to pack terms (`was`→`WS`, `there`→`Tier`, `system`→`SYSTEM_PROMPT`). Gating
+   on "not a common word" removed all of those but left `endpoint` →
+   `endpointing`: ordinary technical speech rewritten to a Deepgram parameter,
+   silently, in the text every later stage reads.
+
+3. **Forward prediction, offline** (Evan's design, and the correct one) — for
+   each pack term, precompute what the recogniser would plausibly return
+   instead, audit the map at build time, then match exactly at runtime.
+   Measured: a model predicted `GRIFFON`→`griffin` and `A2DP`→`a two d p`
+   verbatim, with zero collisions against common speech, for $0.0003 across 12
+   terms. It also predicted `endpointing`→`"end pointing"` rather than
+   `"endpoint"` — the direction of the search is what avoids the false positive
+   in (2). Its weakness is recall: it missed `WASAPI`→`wasapi`, which priming
+   already covers.
+
+So the design is sound and the problem is absent. **Revisit only with a real
+call's transcript showing the failure**, not synthetic audio. If it is ever
+built, build (3): offline map, build-time collision audit, exact match at
+runtime, corrections logged.
+
+A trained classifier (OpenNLP-class maxent, not embeddings — CPU-cheap, no GPU)
+would be the layer above it, for cases where the mis-transcription is plausible
+in context. The blocker there is labelled examples of domain-specific
+mis-transcription, which do not exist. The map in (3) is how they would be
+generated: every correction it makes, with its surrounding turn, is one.
 
 #### The fallback chain
 
