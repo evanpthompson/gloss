@@ -165,6 +165,12 @@ Card schema from Tier 1:
 }]}
 ```
 
+Phase 4 § HUD mode revisits this display as a heads-up surface rather than a
+second screen — form and position carrying meaning before any word is read, and
+ultimately a transparent overlay rather than a monitor across the desk. The
+rules below survive that change; they are about what earns a place on screen,
+not about where the screen is.
+
 **Noise-control rules** (these decide whether the tool gets used or
 ignored, so treat them as load-bearing, not polish):
 - Empty is the normal answer. The Tier 1 prompt must say this explicitly,
@@ -205,7 +211,7 @@ not the end of the call, cards that persist while their topic is live, a local
 glossary as the chain's floor, and an instant preview in front of it. Sessions
 S1–S6 and their measured results are in `PHASE-3-PLAN.md`.
 
-**Phase 4 — teleprompter cards and a hardware control. Not built; specced
+**Phase 4 — HUD mode and a hardware control. Not built; specced
 2026-08-25 so the constraints are recorded before someone builds it.**
 
 Two related pieces, one of which is straightforward and one of which is not.
@@ -222,11 +228,32 @@ server broadcasts on. No new transport. Pin in particular is the useful one —
 it holds a card past its TTL when a topic is still live but the model has moved
 on.
 
-#### 4b. Teleprompter cards — specced with the constraints stated
+#### 4b. HUD mode — glanceable, not readable
 
-**Goal:** read a card without the eye traversing it. Text moves horizontally (or
-advances word-by-word in place) so gaze stays on one point, in the manner of a
-teleprompter, rather than scanning left to right.
+**The framing.** A heads-up display exists so information can be taken in
+*without leaving the primary task*. Aviation and automotive HUDs are not about
+reading faster; they are about not looking away. gloss's primary task is the
+conversation, and the design target is the same: what can be integrated into the
+visual field closely enough that consulting it is not a departure from the call.
+
+That reframing changes the question. "How do I read this faster" is the wrong
+one and has a poor answer. **"How much of this needs reading at all"** is the
+right one, and has several.
+
+**Direction 1 — encode in form, not words.** A card already carries meaning
+before a word is read: `kind` is colour-coded, and Phase 3 fixed cards in place
+so position is stable. That is unexploited. Recency, confidence, and whether a
+term is from the prep pack or the glossary could all be positional or chromatic.
+A glance that yields "there is a jargon card and I already know what it says"
+costs nothing.
+
+**Direction 2 — one word beats six.** The `label` budget is six words. For a
+HUD, the target is one or two: the term itself, with `detail` available only if
+the eye lingers. Progressive disclosure by dwell rather than by layout.
+
+**Direction 3 — motion as a cue, not as a reading mode.** Movement is excellent
+at recruiting attention and poor as a way to deliver text. A card that *arrives*
+with motion and then holds still uses motion for what it is good at.
 
 **What is known before building, so it is not rediscovered:**
 
@@ -234,36 +261,31 @@ teleprompter, rather than scanning left to right.
   scrolling measurably degrades comprehension. The better-studied variant is
   RSVP — one word at a time in a fixed position — which preserves reading speed
   but removes the ability to re-read. Re-reading is what a one-second glance
-  depends on, so RSVP trades away the thing that makes a card work.
-- **A card is already close to one fixation.** The `label` budget is six words.
-  There is not much traversal left to remove, which caps the available benefit.
-- **Cards already hold position.** The Phase 3 card lifecycle updates a card in
-  place rather than tearing the list down, so the eye does not have to re-find
-  a card it has already located. That was the larger source of eye movement and
-  it is gone.
-- **Gaze direction, not saccade pattern, is what reads as "reading."** On a
-  video call the visible signal is the eyes being off-camera and for how long,
-  plus head angle. A fixed stare at an off-axis point for two seconds is not
-  obviously less visible than a quick scan of the same text.
+  depends on, so RSVP trades away the thing that makes a card work. This is why
+  Direction 3 above uses motion for arrival rather than for delivery.
+- **A card is already close to one fixation.** Six words is one or two. There is
+  little traversal left to remove, which caps the benefit available from any
+  scrolling scheme and is the strongest argument for Direction 2 instead.
+- **Cards already hold position.** The Phase 3 lifecycle updates a card in place
+  rather than rebuilding the list, so the eye does not re-find a card it has
+  already located. That was the larger source of eye movement and it is gone.
+- **Duration off-task matters more than eye path.** What makes consulting a
+  second screen a departure from the call is how long attention is elsewhere,
+  not the shape the eye traces while it is there. Every direction above shortens
+  duration; scrolling text lengthens it.
 
-**Therefore: measure before building.** The claim that this reduces glance time
-is testable — put a stopwatch on comprehension of the same card, static versus
-scrolling, at the card's real size and distance. If static wins, as the reading
-literature suggests it will, 4b is not worth building and 4a still is.
+**Measure before building.** The claim is testable: stopwatch comprehension of
+the same card at real size and distance — static six words, static one word,
+scrolling, RSVP. If static-one-word wins, as the reading literature suggests it
+will, most of 4b is a display-layer change and needs no new machinery at all.
 
-**Cheaper levers on the same goal**, if the aim is a shorter glance: shorter
-labels, higher contrast, and a fixed card position. All three are free and none
-of them fight how reading works.
-
-**One thing this changes about the product, recorded because § Name records the
-opposite decision.** The tool was deliberately renamed off "interview-copilot"
-because that name sounded like something to hide, and § Name states that
-interviews are one use case rather than the category. A feature whose purpose is
-to make assistance less visible to the other party moves that position. Framed
-as a teleprompter — reading while holding eye contact, which is an ordinary
-presentation skill — it does not; framed as anti-detection, it does. Worth
-deciding which it is before building, because it determines whether this belongs
-in a public repository.
+**Where this could go.** Nothing above requires a screen at the far end of a
+desk. The same cards on a transparent display — smart glasses, a monitor overlay
+with the video call composited behind it — is the honest endpoint of the HUD
+framing, and it makes the "looking away" problem disappear rather than disguise
+it. Out of scope for Phase 4; worth knowing it is the direction of travel,
+because it argues for keeping cards small, positional and form-encoded rather
+than investing in cleverness about reading long text.
 
 ### Phase 2 design
 
