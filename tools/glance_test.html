@@ -316,35 +316,54 @@ async function run() {
 function report(per) {
   const rows = CONDITIONS.map(condition => {
     const rs = results.filter(r => r.condition === condition);
-    const timed = rs.filter(r => !r.timedOut);
+    const answered = rs.filter(r => !r.timedOut);
     const pct = xs => xs.length ? Math.round(100 * xs.filter(Boolean).length / xs.length) : 0;
     return {
       condition,
       n: rs.length,
-      medianMs: Math.round(median(timed.map(r => r.rt)) ?? 0),
-      timeouts: rs.length - timed.length,
+      responded: answered.length,
+      // null, never 0, when nobody responded. The first run had scroll at 0/7
+      // and this field read "0 ms" — the fastest-looking number in the table,
+      // produced by the one condition nobody ever completed. A measuring
+      // instrument that renders "no data" as "instant" is worse than no
+      // instrument, because the summary is what gets believed.
+      medianMs: answered.length ? Math.round(median(answered.map(r => r.rt))) : null,
+      // Timeouts held at the ceiling rather than dropped. Excluding them
+      // flatters slow conditions: the trials somebody could not finish are
+      // exactly the ones that made it slow.
+      censoredMedianMs: Math.round(median(rs.map(r => r.timedOut ? RESPONSE_TIMEOUT_MS : r.rt))),
+      timeouts: rs.length - answered.length,
       identityPct: pct(rs.map(r => r.identity)),
       contentPct: pct(rs.map(r => r.content)),
     };
   });
-  const best = rows.slice().sort((a, b) => a.medianMs - b.medianMs)[0];
 
+  const ms = v => v === null ? "—" : `${v} ms`;
   $("table").innerHTML =
-    `<table><tr><th>condition</th><th>n</th><th>median RT</th><th>timeouts</th>` +
-    `<th>identity</th><th>content</th></tr>` +
-    rows.map(r => `<tr><td>${r.condition}</td><td>${r.n}</td><td>${r.medianMs} ms</td>` +
-      `<td>${r.timeouts}</td><td>${r.identityPct}%</td><td>${r.contentPct}%</td></tr>`).join("") +
+    `<table><tr><th>condition</th><th>responded</th><th>median RT</th>` +
+    `<th>median, censored</th><th>identity</th><th>content</th></tr>` +
+    rows.map(r => `<tr><td>${r.condition}</td><td>${r.responded}/${r.n}</td>` +
+      `<td>${ms(r.medianMs)}</td><td>${r.censoredMedianMs} ms</td>` +
+      `<td>${r.identityPct}%</td><td>${r.contentPct}%</td></tr>`).join("") +
     `</table>`;
 
+  // Only conditions somebody actually finished are eligible to win.
+  const finished = rows.filter(r => r.responded > 0);
+  const best = finished.slice().sort((a, b) => a.censoredMedianMs - b.censoredMedianMs)[0];
+  const dead = rows.filter(r => r.responded === 0);
   const one = rows.find(r => r.condition === "one");
   const today = rows.find(r => r.condition === "today");
-  const delta = today.medianMs - one.medianMs;
+  const delta = today.censoredMedianMs - one.censoredMedianMs;
+
   $("read").textContent =
-    `Fastest: ${best.condition} at ${best.medianMs} ms. ` +
+    (best ? `Fastest: ${best.condition} at ${best.censoredMedianMs} ms censored. ` : "Nothing was completed. ") +
+    (dead.length ? `Never completed at all: ${dead.map(r => r.condition).join(", ")} — ` +
+                   `that is a harder result than a slow one, not a missing one. ` : "") +
     `"one" is ${Math.abs(delta)} ms ${delta >= 0 ? "faster" : "slower"} than "today", ` +
     `and scores ${one.contentPct}% on content against ${today.contentPct}%. ` +
-    `50% on content is chance — a condition sitting there delivered no detail, ` +
-    `however fast it was, and that is the trade 4b turns on.`;
+    `50% is chance on a two-choice probe. Note that content accuracy is only ` +
+    `evidence about the card when you did NOT already know the term — for ` +
+    `familiar vocabulary it measures what you knew walking in.`;
 
   $("json").value = JSON.stringify({
     ranAt: new Date().toISOString(),
@@ -353,6 +372,7 @@ function report(per) {
     screen: { w: screen.width, h: screen.height, dpr: devicePixelRatio, viewport: [innerWidth, innerHeight] },
     params: { RSVP_WPM, SCROLL_PX_S, RESPONSE_TIMEOUT_MS },
     summary: rows,
+    ceilingMs: RESPONSE_TIMEOUT_MS,
     trials: results,
   }, null, 2);
   show("done");

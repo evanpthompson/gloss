@@ -372,6 +372,79 @@ The instrument was driven end to end in Chromium before anyone was asked to
 sit through it — balanced trials, distinct items, both probes, parseable JSON
 out. What it has not yet had is a human running it, which is the point.
 
+**Result — run 1, 2026-08-27, one participant, 7 trials per condition, 71 cm,
+1680×1050 at dpr 2.**
+
+| condition | responded | median RT | median, censored | identity | content |
+|---|---|---|---|---|---|
+| `one` | 6/7 | 2880 ms | **3011 ms** | 100% | 100% |
+| `rsvp` | 6/7 | 4884 ms | 5036 ms | **57%** | 71% |
+| `today` | 4/7 | 6553 ms | 7999 ms | 100% | 86% |
+| `scroll` | **0/7** | — | ≥8000 ms | 86% | 86% |
+
+*Censored* holds a timeout at the 8s ceiling instead of dropping it. Dropping
+flatters the slow conditions, because the trials that could not be finished are
+exactly the ones that made them slow — `today` loses 3 of 7 that way and
+`scroll` loses all 7.
+
+**`one` wins, by 2.3× on responders and 2.7× censored, with no accuracy cost.**
+That is the largest effect in the run and it is the one 4b turns on. Direction 2
+is confirmed: the term alone is what the card is for, and detail belongs behind
+dwell.
+
+**`scroll` did not lose on time — it never finished. 0 of 7.** And yet identity
+and content both scored 86%, so the text was being taken in. The participant
+could answer about the card and still never reached a moment of having taken it
+in, because a marquee loops and so has no end. Motion as a *delivery* mode
+removes the endpoint that a glance depends on. Direction 3 stands exactly as
+written: motion for arrival, never for delivery.
+
+**`rsvp` fails on the one thing a card must do — it loses the name.** Identity
+57% against a 50% chance floor, while content held 71%. The term is one word in
+thirty with no chance to re-read, so the term is what gets lost. That is a
+sharper reason to drop RSVP than "slower", and it is a reason that would not
+have appeared without the identity probe.
+
+**Two things the run said that were not being asked.**
+
+*The one-second glance is not achievable at this size and distance.* The fastest
+condition's median was 2.9 seconds. Some of that is the instrument — SPACE is
+pressed when the participant is *confident* they have taken it in, which is
+later than when they had — so treat these as a ceiling rather than an estimate
+of perception. But no condition came close to a second, and § 4b's framing
+("about one second of glance, or they're worse than not having them") should be
+read as a design aspiration that is currently unmet, not a describing figure.
+
+*The content probe is confounded for vocabulary the participant already knows.*
+`one` scored 100% on content having displayed no content at all. It shows the
+term; the probe then offers "allowed unreliability" against "measured failure
+count", and anyone who knows what an error budget is answers correctly from
+their own knowledge. So content accuracy is evidence about the card **only for
+terms the participant does not already know** — which is the case gloss exists
+for, and the case this run did not measure. The prediction recorded above that
+`one` would sit at chance on content was wrong for this reason rather than
+because one word delivers detail.
+
+**Confidence, stated honestly.** n=7 per condition, one participant, one
+session. `one` over `today` (2.7×) and `scroll`'s 0/7 completion cliff are large
+enough to act on. `rsvp`'s identity result is 4/7 and is one or two trials from
+noise — directionally believed, not established. Direction 1 (form, colour and
+position) is untouched by this instrument and neither confirmed nor refuted.
+
+**What run 2 would fix, if 4b needs firmer ground:** raise the ceiling to ~15s
+so `today` stops being censored at 3 of 7; add unfamiliar terms with
+call-specific distractors so the content probe measures the card rather than the
+participant; and add a second participant, since one person's reading speed is
+currently the entire dataset.
+
+**What was fixed in the instrument because of this run.** `scroll` returned a
+median of `0 ms` — the median of an empty list, rendered as though it were the
+fastest result in the table, produced by the one condition nobody completed. The
+summary now reports `—` with a responded count, holds timeouts at the ceiling,
+and excludes conditions with no responses from "fastest". An instrument that
+renders *no data* as *instant* fails in the direction of looking fine, which is
+the direction that gets believed.
+
 **Where this could go.** Nothing above requires a screen at the far end of a
 desk. The same cards on a transparent display — smart glasses, a monitor overlay
 with the video call composited behind it — is the honest endpoint of the HUD
