@@ -331,10 +331,46 @@ with motion and then holds still uses motion for what it is good at.
   not the shape the eye traces while it is there. Every direction above shortens
   duration; scrolling text lengthens it.
 
-**Measure before building.** The claim is testable: stopwatch comprehension of
-the same card at real size and distance — static six words, static one word,
-scrolling, RSVP. If static-one-word wins, as the reading literature suggests it
-will, most of 4b is a display-layer change and needs no new machinery at all.
+**Measure before building — the instrument exists, built 2026-08-27.**
+`tools/glance_test.html`, opened fullscreen on the second screen at the
+distance you actually sit. No server and no dependencies; it is one file.
+
+Four conditions, each rendered with the card CSS copied out of `display.html`
+rather than approximated, because the size on that screen is the variable
+being measured:
+
+| condition | what is shown |
+|---|---|
+| `today` | six-word label + detail line — what ships now |
+| `one` | the term alone, at label size |
+| `scroll` | label + detail as one marquee line, 160 px/s |
+| `rsvp` | label + detail, one word at a time in place, 300 wpm |
+
+**Two probes per trial, and the second is the one that decides 4b.** Press
+SPACE when the card has been taken in, then answer *which term was on screen*
+and *what did it say*. Without them this measures when somebody pressed a key,
+which is self-report rather than comprehension. `one` should be fastest on
+reaction time and at chance (50%) on content — that trade is the result, and an
+instrument that only timed the glance would hide it and make one-word look
+free.
+
+Fatigue and anticipation are designed out rather than hoped about: four
+practice trials that are not recorded, a jittered fixation so the onset cannot
+be predicted, conditions balanced by construction and then the whole sequence
+shuffled, and every trial drawn from a different one of the 32 items so nothing
+is answerable from having seen the same card under another condition.
+
+**Reading the result.** If `one` is fastest *and* holds content accuracy near
+chance, that is not a failure — it says the term alone is enough to answer
+"there is a jargon card and I already know what it says", and detail belongs
+behind dwell (Direction 2). If `one` is fastest *and* content stays high, the
+detail line was never being read anyway and can go. If `today` wins outright,
+Direction 2 is wrong and the six-word label stays. `scroll` and `rsvp` are in
+the set to be ruled out on this screen rather than on the literature alone.
+
+The instrument was driven end to end in Chromium before anyone was asked to
+sit through it — balanced trials, distinct items, both probes, parseable JSON
+out. What it has not yet had is a human running it, which is the point.
 
 **Where this could go.** Nothing above requires a screen at the far end of a
 desk. The same cards on a transparent display — smart glasses, a monitor overlay

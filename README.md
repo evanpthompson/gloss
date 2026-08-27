@@ -205,6 +205,22 @@ Without it the chain still keeps its `local` link, serving `recall` from your
 pack alone. The link is dropped with a warning only when both halves are empty
 — no glossary built *and* a pack with no headed sections.
 
+## Glance test (Phase 4b)
+
+Before any HUD code is written, `SPEC.md` § 4b calls for a measurement: is a
+one-word card taken in faster than the card that ships today, and does moving
+the text help or hurt? The instrument is one file, no server, no dependencies:
+
+```bash
+open tools/glance_test.html      # then fullscreen it on the second screen
+```
+
+Sit at the distance you actually sit — size is the variable. About six minutes
+for 28 trials. Press SPACE when a card has landed, then answer two questions;
+the second one is what decides 4b, because a condition can be fast and still
+deliver nothing. Results come out as a table and as JSON to paste into
+`SPEC.md`.
+
 ## Clicker control
 
 A Bluetooth presenter clicker drives the display — it is an HID keyboard, so

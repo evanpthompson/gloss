@@ -1,0 +1,364 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>gloss — glance test</title>
+<!--
+  The measurement SPEC.md § 4b demands before any HUD code is written.
+
+  The claim under test: for a card consulted mid-conversation, a single word
+  beats the six-word label plus detail that ships today, and both beat any
+  scheme that moves the text. If static-one-word wins, most of 4b is a
+  display-layer change and needs no new machinery — which is worth knowing
+  before building machinery.
+
+  Four conditions, each rendered at the real size display.html uses, so the
+  numbers describe the actual screen rather than a mockup:
+
+    today   six-word label + detail line     (what ships now)
+    one     the term alone, at label size
+    scroll  label + detail, marquee
+    rsvp    label + detail, one word at a time in a fixed position
+
+  Two probes per trial, and both are load-bearing:
+
+    identity  which term was on screen?    answerable in every condition
+    content   what did it say?             answerable only if detail landed
+
+  Without them this measures when somebody pressed a key, which is
+  self-report, not comprehension. `one` is expected to be fastest on reaction
+  time and at chance on the content probe — that trade is the finding, and a
+  design that only measured speed would hide it.
+
+  Open it fullscreen on the second screen, at the distance you actually sit.
+  No server, no dependencies: open the file.
+-->
+<style>
+  :root {
+    --bg: #0f1115; --fg: #e8e8ea; --dim: #6b7280;
+    --recall: #7dd3a0; --jargon: #f0b45f;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: var(--bg); color: var(--fg); min-height: 100vh;
+    font: 16px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    display: flex; flex-direction: column; padding: 3vh 3vw; gap: 2vh;
+  }
+  #stage { flex: 1; display: flex; flex-direction: column; justify-content: center; }
+
+  /* Copied from display.html rather than approximated. The whole point is to
+     measure the card that ships, so if that one changes this must too. */
+  .card { border-left: 4px solid var(--jargon); padding: 1.4vh 0 1.4vh 1.6vw; }
+  .label { font-size: clamp(20px, 3.2vw, 46px); font-weight: 600; letter-spacing: -0.01em; }
+  .detail { font-size: clamp(13px, 1.4vw, 21px); color: var(--dim); margin-top: 0.5vh; }
+  .tag {
+    font-size: clamp(10px, 0.85vw, 13px); text-transform: uppercase;
+    letter-spacing: 0.12em; color: var(--jargon); margin-bottom: 0.4vh;
+  }
+
+  /* Marquee. Overflow hidden on the card, one long line translated across it. */
+  .scroller { overflow: hidden; }
+  .scroller .line { white-space: nowrap; display: inline-block; will-change: transform; }
+
+  #fix { font-size: 48px; color: var(--dim); text-align: center; }
+  #probe { display: flex; flex-direction: column; gap: 2.4vh; align-items: center; }
+  #question { font-size: clamp(16px, 1.8vw, 24px); color: var(--dim); }
+  #choices { display: flex; gap: 2vw; }
+  .choice {
+    background: #1a1d24; color: var(--fg); border: 2px solid #2a2f3a; border-radius: 8px;
+    padding: 1.6vh 2vw; font: inherit; font-size: clamp(15px, 1.6vw, 22px); cursor: pointer;
+    min-width: 22vw;
+  }
+  .choice:hover { border-color: var(--jargon); }
+  .choice kbd {
+    display: block; font-size: 11px; color: var(--dim); letter-spacing: 0.1em;
+    text-transform: uppercase; margin-bottom: 0.6vh;
+  }
+
+  #intro, #done { max-width: 62ch; margin: 0 auto; display: flex; flex-direction: column; gap: 1.6vh; }
+  h1 { font-size: 22px; font-weight: 600; }
+  p, li { font-size: 15px; color: #c3c7cf; }
+  ul { padding-left: 1.2em; display: flex; flex-direction: column; gap: 0.4em; }
+  label { font-size: 14px; color: var(--dim); display: flex; gap: 0.6em; align-items: center; }
+  input[type=number] {
+    background: #1a1d24; color: var(--fg); border: 1px solid #2a2f3a;
+    border-radius: 5px; padding: 5px 8px; font: inherit; width: 6em;
+  }
+  button.go {
+    background: var(--recall); color: #0f1115; border: 0; border-radius: 8px;
+    padding: 12px 22px; font: inherit; font-weight: 600; cursor: pointer; align-self: flex-start;
+  }
+  #bar { font-size: 12px; color: var(--dim); text-align: center; }
+  table { border-collapse: collapse; font-size: 14px; width: 100%; }
+  th, td { text-align: right; padding: 6px 10px; border-bottom: 1px solid #232833; }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--dim); font-weight: 500; }
+  textarea {
+    width: 100%; height: 22vh; background: #1a1d24; color: #c3c7cf; border: 1px solid #2a2f3a;
+    border-radius: 6px; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; padding: 10px;
+  }
+  .hidden { display: none !important; }
+</style>
+
+<div id="stage">
+  <div id="intro">
+    <h1>gloss — glance test</h1>
+    <p>Measures whether a one-word card is taken in faster than the card that
+      ships today, and whether moving the text helps or hurts. SPEC.md § 4b
+      calls for this before any HUD code is written.</p>
+    <ul>
+      <li>Put this on the <strong>second screen</strong>, fullscreen, at the
+        distance you actually sit. Size is the variable being measured.</li>
+      <li>A card appears. Press <kbd>SPACE</kbd> the moment you have taken it
+        in — not when you have finished reading every word.</li>
+      <li>Then two questions. Answer with <kbd>F</kbd> / <kbd>J</kbd> or click.
+        Guess if you did not catch it; guessing is a real answer here.</li>
+      <li>Four practice trials first. They are not recorded.</li>
+    </ul>
+    <label>Viewing distance, cm <input type="number" id="distance" value="90" min="20" max="400"></label>
+    <label>Trials per condition <input type="number" id="per" value="7" min="3" max="8"></label>
+    <button class="go" id="start">Start</button>
+  </div>
+
+  <div id="fix" class="hidden">+</div>
+
+  <div id="card" class="hidden"></div>
+
+  <div id="probe" class="hidden">
+    <div id="question"></div>
+    <div id="choices">
+      <button class="choice" id="c0"><kbd>F</kbd><span></span></button>
+      <button class="choice" id="c1"><kbd>J</kbd><span></span></button>
+    </div>
+  </div>
+
+  <div id="done" class="hidden">
+    <h1>Result</h1>
+    <div id="table"></div>
+    <p id="read"></p>
+    <textarea id="json" readonly></textarea>
+    <button class="go" id="again">Run again</button>
+  </div>
+</div>
+<div id="bar"></div>
+
+<script>
+// --- the corpus ------------------------------------------------------------
+//
+// One item is used at most once per run, so no trial is answerable from
+// having seen the same card under another condition. 32 items caps a run at
+// 8 trials per condition; the input above is clamped to that.
+const ITEMS = [
+  ["Kestrel","Kestrel is their deploy gate","Every change clears it before shipping. They have raised it twice already.","Merlin","a deploy gate","a load balancer"],
+  ["Idempotency","Idempotency on the retry path","The same request twice must not charge twice. Ask where the keys live.","Concurrency","safe to retry","safe to cache"],
+  ["Backpressure","Backpressure in the ingest queue","Slow consumers push load back upstream instead of silently dropping it.","Backfill","slowing the producer","dropping old messages"],
+  ["Sharding","Sharding by tenant identifier","Data split across nodes by customer, so one tenant cannot starve another.","Caching","splitting data across nodes","copying data to every node"],
+  ["Quorum","Quorum reads on the replica set","A majority of replicas must agree before a read is returned.","Quota","a majority must agree","the fastest replica answers"],
+  ["Blue-green","Blue-green deploy for the API","Two identical environments; traffic switches at once and rolls back the same way.","Red-black","two environments, instant switch","a gradual percentage rollout"],
+  ["Canary","Canary release to five percent","A small slice of live traffic sees the new build before anyone else.","Cascade","a small traffic slice first","a full switch at midnight"],
+  ["Sidecar","Sidecar proxy per pod","A helper container beside the app handles TLS, retries and telemetry.","Sandbox","a helper beside the app","a shared gateway in front"],
+  ["CQRS","CQRS split on the orders service","Reads and writes use separate models, so each side scales on its own.","CQL","separate read and write models","one unified model"],
+  ["Saga","Saga for the booking workflow","A long transaction as steps with compensating undo, since two-phase commit will not hold.","Sonar","steps with compensating undo","one atomic transaction"],
+  ["Bulkhead","Bulkhead around the payments client","Isolated pools, so one slow dependency cannot drain every thread.","Bulk load","isolating resource pools","sharing one thread pool"],
+  ["Circuit breaker","Circuit breaker on the search call","After repeated failures it stops calling and fails fast for a while.","Rate limiter","stops calling after failures","queues calls until healthy"],
+  ["Tail latency","Tail latency on the checkout path","The slowest requests, p99 and beyond — not the average anybody quotes.","Tail sampling","the slowest requests","the average request"],
+  ["Write amplification","Write amplification in the storage layer","One logical write causes many physical writes, wearing the device out faster.","Read amplification","one write causes many","one read causes many"],
+  ["Consistent hashing","Consistent hashing across cache nodes","Adding a node moves a fraction of the keys instead of all of them.","Cryptographic hashing","adding a node moves few keys","adding a node rehashes everything"],
+  ["Fan-out","Fan-out on the timeline write","One post copied into many followers' feeds at write time rather than read time.","Failover","copying to many on write","assembling the feed on read"],
+  ["Dual write","Dual write during the migration","Both stores written while reads move across. Order matters or records read stale.","Dry run","writing to both stores","reading from both stores"],
+  ["Outbox","Outbox pattern for event publishing","Events written in the same transaction as the data, then relayed separately.","Inbox","events written with the data","events published directly"],
+  ["Leader election","Leader election in the scheduler","One node holds a lease and does the work; the rest stand by.","Load shedding","one node holds a lease","every node shares the work"],
+  ["Load shedding","Load shedding above the limit","Rejecting some requests early so the rest still meet their deadline.","Load balancing","rejecting some to save the rest","spreading load evenly"],
+  ["Cold start","Cold start on the serverless path","The first request after idle pays container startup, sometimes whole seconds.","Cold storage","first request pays startup","archived data is slow"],
+  ["Thundering herd","Thundering herd after cache expiry","Every client misses at the same moment and hits the origin together.","Rolling restart","everyone misses at once","one client retries forever"],
+  ["Exactly once","Exactly-once delivery in the pipeline","Usually at-least-once plus deduplication. Ask where the dedupe key is stored.","At most once","at-least-once plus dedupe","the broker guarantees it"],
+  ["Schema registry","Schema registry for the event bus","Producers register schemas, so consumers break at deploy rather than at runtime.","Service registry","schemas checked before deploy","schemas discovered at runtime"],
+  ["Feature flag","Feature flag on the coalescing layer","The new path ships dark, then serves a slice after a shadow compare.","Feature branch","shipped off, enabled later","merged only when finished"],
+  ["Shadow traffic","Shadow traffic against the new service","Real requests mirrored to it; the responses are compared and never served.","Synthetic traffic","mirrored, responses discarded","generated, responses served"],
+  ["Backfill","Backfill job for the missing rows","Historic records reprocessed after a schema change, throttled to spare live traffic.","Backpressure","reprocessing historic records","pausing new records"],
+  ["Blast radius","Blast radius of a bad deploy","How much breaks when one thing does. Cells and quotas shrink it.","Burn rate","how much breaks at once","how fast budget is spent"],
+  ["Error budget","Error budget for the quarter","How much unreliability the SLO permits before feature work has to stop.","Error rate","allowed unreliability","measured failure count"],
+  ["Toil","Toil in the on-call rotation","Manual, repetitive work that scales with load and should be automated away.","Churn","repetitive manual work","staff turnover"],
+  ["Golden signals","Golden signals on every service","Latency, traffic, errors and saturation — the four things they alert on.","Golden path","four metrics to alert on","the approved way to build"],
+  ["Chaos engineering","Chaos engineering in staging only","Failures injected on purpose, to find out what actually breaks first.","Context engineering","injecting failures deliberately","tuning prompts deliberately"],
+].map(([term, label, detail, termDistractor, gist, gistDistractor]) =>
+  ({ term, label, detail, termDistractor, gist, gistDistractor }));
+
+const CONDITIONS = ["today", "one", "scroll", "rsvp"];
+const RSVP_WPM = 300;          // 200ms a word; the rate RSVP research reports as comfortable
+const SCROLL_PX_S = 160;       // marquee speed; slow enough to read, which is the charitable setting
+const RESPONSE_TIMEOUT_MS = 8000;
+
+// --- helpers ---------------------------------------------------------------
+const $ = id => document.getElementById(id);
+const shuffle = xs => { const a = xs.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
+const median = xs => { if (!xs.length) return null; const a = xs.slice().sort((p, q) => p - q); const m = a.length >> 1; return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2; };
+const show = (...ids) => { for (const el of ["intro", "fix", "card", "probe", "done"]) $(el).classList.toggle("hidden", !ids.includes(el)); };
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+let trials = [], results = [], at = 0, timers = [];
+
+function clearTimers() { for (const t of timers) { clearTimeout(t); clearInterval(t); } timers = []; }
+
+// --- rendering one card ----------------------------------------------------
+function render(item, condition) {
+  const card = $("card");
+  card.className = "card";
+  if (condition === "one") {
+    card.innerHTML = `<div class="tag">unfamiliar term</div><div class="label"></div>`;
+    card.querySelector(".label").textContent = item.term;
+    return;
+  }
+  if (condition === "today") {
+    card.innerHTML = `<div class="tag">unfamiliar term</div><div class="label"></div><div class="detail"></div>`;
+    card.querySelector(".label").textContent = item.label;
+    card.querySelector(".detail").textContent = item.detail;
+    return;
+  }
+  if (condition === "scroll") {
+    card.classList.add("scroller");
+    card.innerHTML = `<div class="tag">unfamiliar term</div><div class="label"><span class="line"></span></div>`;
+    const line = card.querySelector(".line");
+    line.textContent = `${item.label} — ${item.detail}`;
+    // Start just off the right edge and translate left at a fixed rate, so the
+    // speed is a property of the condition rather than of the text length.
+    requestAnimationFrame(() => {
+      const travel = line.scrollWidth + card.clientWidth;
+      line.animate(
+        [{ transform: `translateX(${card.clientWidth}px)` }, { transform: `translateX(${-line.scrollWidth}px)` }],
+        { duration: (travel / SCROLL_PX_S) * 1000, iterations: Infinity, easing: "linear" }
+      );
+    });
+    return;
+  }
+  // rsvp: one word at a time, fixed position, so the eye never travels.
+  card.innerHTML = `<div class="tag">unfamiliar term</div><div class="label"></div>`;
+  const slot = card.querySelector(".label");
+  const words = `${item.label} — ${item.detail}`.split(/\s+/);
+  let i = 0;
+  slot.textContent = words[i++];
+  timers.push(setInterval(() => { slot.textContent = words[i++] ?? ""; if (i > words.length) clearTimers(); },
+                          Math.round(60000 / RSVP_WPM)));
+}
+
+// --- one two-alternative probe --------------------------------------------
+function ask(question, correct, wrong) {
+  return new Promise(resolve => {
+    const flip = Math.random() < 0.5;
+    const options = flip ? [correct, wrong] : [wrong, correct];
+    const correctIndex = flip ? 0 : 1;
+    $("question").textContent = question;
+    $("c0").querySelector("span").textContent = options[0];
+    $("c1").querySelector("span").textContent = options[1];
+    show("probe");
+
+    const answer = index => {
+      window.removeEventListener("keydown", onKey);
+      $("c0").onclick = $("c1").onclick = null;
+      resolve(index === correctIndex);
+    };
+    const onKey = e => {
+      const k = e.key.toLowerCase();
+      if (k === "f") { e.preventDefault(); answer(0); }
+      if (k === "j") { e.preventDefault(); answer(1); }
+    };
+    window.addEventListener("keydown", onKey);
+    $("c0").onclick = () => answer(0);
+    $("c1").onclick = () => answer(1);
+  });
+}
+
+// --- one trial -------------------------------------------------------------
+async function runTrial({ item, condition }, recorded) {
+  // Fixation, with a jittered duration so the onset cannot be anticipated —
+  // a predictable onset lets the hand start moving before the card exists.
+  show("fix");
+  await sleep(600 + Math.random() * 500);
+
+  render(item, condition);
+  show("card");
+  const shown = performance.now();
+
+  const rt = await new Promise(resolve => {
+    const stop = value => { window.removeEventListener("keydown", onKey); clearTimeout(bail); resolve(value); };
+    const onKey = e => { if (e.code === "Space") { e.preventDefault(); stop(performance.now() - shown); } };
+    window.addEventListener("keydown", onKey);
+    const bail = setTimeout(() => stop(null), RESPONSE_TIMEOUT_MS);
+  });
+  clearTimers();
+  show();
+
+  // Both probes, always in the same order: identity is the cheaper question,
+  // and asking content first would tell the participant the answer to it.
+  const identity = await ask("Which term was on screen?", item.term, item.termDistractor);
+  const content = await ask("What did it say?", item.gist, item.gistDistractor);
+
+  if (recorded) results.push({ condition, term: item.term, rt, timedOut: rt === null, identity, content });
+}
+
+async function run() {
+  const per = Math.min(8, Math.max(3, parseInt($("per").value, 10) || 7));
+  const pool = shuffle(ITEMS);
+  const practice = CONDITIONS.map((condition, i) => ({ item: pool[i], condition }));
+
+  // Balanced by construction: every condition gets `per` distinct items, then
+  // the whole sequence is shuffled so condition order cannot track fatigue.
+  let next = CONDITIONS.length;
+  trials = shuffle(CONDITIONS.flatMap(condition =>
+    Array.from({ length: per }, () => ({ item: pool[next++], condition }))));
+
+  results = []; at = 0;
+  for (const trial of practice) { $("bar").textContent = "practice — not recorded"; await runTrial(trial, false); }
+  for (const trial of trials) { $("bar").textContent = `trial ${++at} of ${trials.length}`; await runTrial(trial, true); }
+  $("bar").textContent = "";
+  report(per);
+}
+
+// --- results ---------------------------------------------------------------
+function report(per) {
+  const rows = CONDITIONS.map(condition => {
+    const rs = results.filter(r => r.condition === condition);
+    const timed = rs.filter(r => !r.timedOut);
+    const pct = xs => xs.length ? Math.round(100 * xs.filter(Boolean).length / xs.length) : 0;
+    return {
+      condition,
+      n: rs.length,
+      medianMs: Math.round(median(timed.map(r => r.rt)) ?? 0),
+      timeouts: rs.length - timed.length,
+      identityPct: pct(rs.map(r => r.identity)),
+      contentPct: pct(rs.map(r => r.content)),
+    };
+  });
+  const best = rows.slice().sort((a, b) => a.medianMs - b.medianMs)[0];
+
+  $("table").innerHTML =
+    `<table><tr><th>condition</th><th>n</th><th>median RT</th><th>timeouts</th>` +
+    `<th>identity</th><th>content</th></tr>` +
+    rows.map(r => `<tr><td>${r.condition}</td><td>${r.n}</td><td>${r.medianMs} ms</td>` +
+      `<td>${r.timeouts}</td><td>${r.identityPct}%</td><td>${r.contentPct}%</td></tr>`).join("") +
+    `</table>`;
+
+  const one = rows.find(r => r.condition === "one");
+  const today = rows.find(r => r.condition === "today");
+  const delta = today.medianMs - one.medianMs;
+  $("read").textContent =
+    `Fastest: ${best.condition} at ${best.medianMs} ms. ` +
+    `"one" is ${Math.abs(delta)} ms ${delta >= 0 ? "faster" : "slower"} than "today", ` +
+    `and scores ${one.contentPct}% on content against ${today.contentPct}%. ` +
+    `50% on content is chance — a condition sitting there delivered no detail, ` +
+    `however fast it was, and that is the trade 4b turns on.`;
+
+  $("json").value = JSON.stringify({
+    ranAt: new Date().toISOString(),
+    perCondition: per,
+    distanceCm: parseInt($("distance").value, 10),
+    screen: { w: screen.width, h: screen.height, dpr: devicePixelRatio, viewport: [innerWidth, innerHeight] },
+    params: { RSVP_WPM, SCROLL_PX_S, RESPONSE_TIMEOUT_MS },
+    summary: rows,
+    trials: results,
+  }, null, 2);
+  show("done");
+}
+
+$("start").onclick = run;
+$("again").onclick = () => show("intro");
+show("intro");
+</script>
