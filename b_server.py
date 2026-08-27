@@ -38,6 +38,7 @@ import failures
 import kb
 import keyterms
 import providers
+import recall
 from cards import card_schema, valid_cards
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
@@ -212,6 +213,15 @@ GLOSSARY = kb.Glossary.load(Path(os.environ.get("GLOSS_KB", str(kb.DEFAULT_PATH)
 if len(GLOSSARY):
     log.info("Glossary: %d terms loaded", len(GLOSSARY))
 
+# The other half of the local floor. The glossary knows what words mean; this
+# knows what the person wrote about them before the call, which is the half
+# that was unreachable during an outage — see recall.py.
+NOTES = recall.Notes.from_pack(PREP_PACK)
+if len(NOTES):
+    log.info("Notes: %d section(s) indexed for local recall", len(NOTES))
+else:
+    log.warning("Notes: no headed sections in the pack — local recall is unavailable")
+
 KEYTERM_BUDGET = int(os.environ.get("GLOSS_KEYTERM_BUDGET", str(keyterms.DEFAULT_BUDGET_TOKENS)))
 KEYTERMS, _keyterms_dropped = keyterms.from_pack(PREP_PACK, KEYTERM_BUDGET)
 if KEYTERMS:
@@ -260,15 +270,20 @@ class _FakeLLM:
         }
 
 
-class _Glossary:
+class _Local:
     """The local knowledge base, shaped like a model so the chain can hold it.
 
     It reads the newest interviewer turn rather than the rendered prompt — a
     dictionary has no use for a system prompt, a transcript or a cache
-    breakpoint — and returns at most one card.
+    breakpoint — and answers from two indexes that are already in memory: the
+    prep pack for `recall`, the glossary for `jargon`.
 
-    **It raises when it does not know a term**, rather than answering with zero
-    cards. Zero cards is how a *quiet turn* looks, and this link only ever runs
+    **Recall comes first** on the wire and therefore first on screen. When both
+    fire, the person's own note about this specific call is the one worth the
+    glance; a definition is useful, but they wrote the note for this.
+
+    **It raises when it knows nothing**, rather than answering with zero cards.
+    Zero cards is how a *quiet turn* looks, and this link only ever runs
     because every vendor above it has already failed. Reporting "nothing to
     say" there would turn a total outage into a normal-looking screen, which is
     the one thing enrich() exists to prevent.
@@ -276,10 +291,10 @@ class _Glossary:
 
     async def ainvoke(self, _messages: list) -> dict:
         text = transcript[-1][1] if transcript else ""
-        card = GLOSSARY.card(text)
-        if card is None:
-            raise LookupError("no glossary term in this turn")
-        return {"raw": None, "parsed": {"cards": [card]}, "parsing_error": None}
+        cards = [c for c in (NOTES.card(text), GLOSSARY.card(text)) if c is not None]
+        if not cards:
+            raise LookupError("nothing local matched this turn")
+        return {"raw": None, "parsed": {"cards": cards[:MAX_CARDS]}, "parsing_error": None}
 
 
 # Every provider states its own credential variables, including the fake. The
@@ -328,16 +343,21 @@ for _name in FALLBACK_NAMES:
             f"Known providers: {', '.join(sorted(providers.PROFILES))}.\n"
             "Add a row to providers.py before naming it in a chain."
         )
-    if _name == "local" and not len(GLOSSARY):
-        # An unbuilt knowledge base is a benign, expected state — the file is
-        # optional and kb.Glossary.load() returns empty rather than raising.
-        # Dropping the link with a warning is right here, where refusing to
-        # boot would punish every deployment that has not run the builder. A
-        # glossary that exists but is malformed is a different matter: that
-        # raises out of load() above, before this point.
+    if _name == "local" and not len(GLOSSARY) and not len(NOTES):
+        # Empty on both halves is a benign, expected state — the glossary file
+        # is optional and kb.Glossary.load() returns empty rather than raising,
+        # and a pack with no headings indexes to nothing. Dropping the link
+        # with a warning is right here, where refusing to boot would punish
+        # every deployment that has not run the builder. A glossary that exists
+        # but is malformed is a different matter: that raises out of load()
+        # above, before this point.
+        #
+        # Either half is enough to keep the link: a pack alone still answers
+        # recall during an outage, which is the whole reason recall.py exists.
         log.warning(
-            "Glossary link requested but no terms are loaded — dropping it. "
-            "Build one with: uv run python tools/build_kb.py <books-dir>"
+            "Local link requested but neither the glossary nor the pack holds "
+            "anything — dropping it. Build a glossary with: "
+            "uv run python tools/build_kb.py <books-dir>"
         )
         continue
     _fallback = providers.PROFILES[_name]
@@ -450,7 +470,7 @@ def make_link(name: str, profile: providers.Profile):
         log.warning("GLOSS_PROVIDER=fake — enrichment is canned, no model will be called")
         model = _FakeLLM()
     elif name == "local":
-        model = _Glossary()
+        model = _Local()
     else:
         # include_raw keeps the underlying message alongside the parsed cards,
         # so the token/cache counters in enrich() stay observable. Without it
@@ -641,29 +661,44 @@ def build_turn_message(profile: providers.Profile):
 
 
 async def preview(text: str) -> None:
-    """Paint what the glossary already knows, before asking anyone.
+    """Paint what is already known locally, before asking anyone.
 
-    The chain answers in 1.1-1.8s. The glossary answers in microseconds, from a
-    dict that is already in memory. On a live call that gap is the difference
-    between reading a definition while the interviewer is still talking and
-    reading it after you have already had to respond.
+    The chain answers in 1.1-1.8s. Two in-memory indexes answer in
+    microseconds. On a live call that gap is the difference between reading a
+    card while the interviewer is still talking and reading it after you have
+    already had to respond.
 
-    **This does not replace the model call, and deliberately so.** Whether a
-    turn also deserves a *recall* card — the more useful kind, and the one only
-    a model can write — cannot be known without asking. So the glossary paints
-    first and the model supersedes it: same topic id, same slot, better text,
-    no flash. That is what the card lifecycle was built for.
+    **An earlier version of this docstring said a `recall` card was "the one
+    only a model can write", and that is no longer true.** It was true while
+    the only local corpus was a shelf of books, where a retrieved passage would
+    have been a plausible lie about the person's own notes. Indexing the prep
+    pack instead removes the objection rather than tolerating it — a recall
+    card quotes what the person wrote, and recall.py can only ever quote. So
+    both kinds paint here now.
+
+    **This still does not replace the model call.** The local indexes answer
+    from words that literally appear; the model answers from what was meant.
+    So the pack paints first and the model supersedes it: same slot, better
+    text, no flash. That is what the card lifecycle was built for.
 
     It buys latency, not tokens. The model is asked either way.
     """
-    if not PREVIEW or not len(GLOSSARY):
+    if not PREVIEW:
         return
-    card = GLOSSARY.card(text)
-    if card is None:
+    # Recall first, for the same reason it is first in `_Local`: during the
+    # 1.5s before the model answers, the note the person wrote for this call is
+    # what they most want to have already been reading.
+    cards = [c for c in (NOTES.card(text), GLOSSARY.card(text)) if c is not None]
+    if not cards:
         return
-    _provisional.add(card["id"])
+    cards = cards[:MAX_CARDS]
+    _provisional.update(c["id"] for c in cards)
     await broadcast(
-        {"type": "cards", "cards": [{**card, "ttl": PREVIEW_TTL_S}], "max": MAX_CARDS}
+        {
+            "type": "cards",
+            "cards": [{**c, "ttl": PREVIEW_TTL_S} for c in cards],
+            "max": MAX_CARDS,
+        }
     )
 
 
@@ -913,7 +948,11 @@ async def main() -> None:
             # Asking it a question here would fail by design: the transcript is
             # empty, so it knows nothing, and it reports not-knowing as a
             # failure. What proves this link is that it has terms in it.
-            log.info("Preflight OK: local:glossary holds %d terms", len(GLOSSARY))
+            log.info(
+                "Preflight OK: local holds %d glossary term(s) and %d note section(s)",
+                len(GLOSSARY),
+                len(NOTES),
+            )
             continue
         try:
             await link.ainvoke(None)

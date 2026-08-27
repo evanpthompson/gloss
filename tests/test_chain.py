@@ -48,6 +48,19 @@ def only_card(server) -> dict:
     return server.sent[-1]["cards"][0]
 
 
+def card_of_kind(server, kind: str) -> dict:
+    """The one card of a given kind in the last batch.
+
+    The local link answers with both kinds when both match, so a positional
+    index no longer identifies a card. Asserting on the kind you meant is also
+    what makes an ordering change show up as a readable failure.
+    """
+    assert server.sent, "nothing reached the display"
+    matching = [c for c in server.sent[-1]["cards"] if c["kind"] == kind]
+    assert len(matching) == 1, f"expected one {kind} card, got {server.sent[-1]['cards']}"
+    return matching[0]
+
+
 # --- the ordinary case -----------------------------------------------------
 
 async def test_primary_answers_and_the_fallback_is_never_called(chained, vendor) -> None:
@@ -270,14 +283,36 @@ async def test_the_glossary_answers_when_every_vendor_is_out(with_glossary, vend
     vendor.fail(503, "server_overloaded", "overloaded", times=4)
     with_glossary.transcript.append(TURN)
     await with_glossary.enrich()
-    card = only_card(with_glossary)
-    assert card["kind"] == "jargon"
-    assert card["label"] == "Kestrel"
+    assert card_of_kind(with_glossary, "jargon")["label"] == "Kestrel"
+
+
+async def test_the_notes_answer_when_every_vendor_is_out(with_glossary, vendor) -> None:
+    """The half that was missing. A total outage used to leave the person's own
+    notes — the highest-value words in the system, and already in memory —
+    unreachable, while a definition mined from a book still got through."""
+    vendor.fail(503, "server_overloaded", "overloaded", times=4)
+    with_glossary.transcript.append(TURN)
+    await with_glossary.enrich()
+    card = card_of_kind(with_glossary, "recall")
+    assert card["detail"] == "Kestrel is the deploy gate."
+
+
+async def test_recall_is_painted_before_jargon(with_glossary, vendor) -> None:
+    """Order on the wire is order on screen. When both fire, the note the
+    person wrote for this call is the one worth the glance."""
+    vendor.fail(503, "server_overloaded", "overloaded", times=4)
+    with_glossary.transcript.append(TURN)
+    await with_glossary.enrich()
+    assert [c["kind"] for c in with_glossary.sent[-1]["cards"]] == ["recall", "jargon"]
 
 
 async def test_the_glossary_costs_nothing_when_the_vendors_are_healthy(with_glossary, vendor) -> None:
-    """It is a floor, not a first pass. A healthy primary means it never runs —
-    and it must never pre-empt a recall card, which only a model can write."""
+    """It is a floor, not a first pass. A healthy primary means it never runs.
+
+    The local link can now write a recall card of its own, so the reason has
+    narrowed: the model reads what was *meant*, the indexes only match what was
+    literally said. The better answer still wins when it is available.
+    """
     vendor.cards(CARD)
     with_glossary.transcript.append(TURN)
     await with_glossary.enrich()
@@ -297,11 +332,25 @@ async def test_a_glossary_miss_reports_the_vendor_failure_not_its_own(with_gloss
     assert card["label"] == "Provider out of credit", "the glossary's miss masked the real failure"
 
 
-def test_an_unbuilt_glossary_drops_the_link_rather_than_blocking_the_boot(build_server, tmp_path) -> None:
-    """The knowledge base is optional and its absence is benign. Refusing to
-    start would punish every deployment that has not run the builder."""
+def test_an_unbuilt_glossary_still_leaves_a_local_link_worth_having(build_server, tmp_path) -> None:
+    """Either half is enough. The books are optional and most deployments will
+    never run the builder, but every deployment has a prep pack — so an unbuilt
+    glossary must not take recall down with it."""
     server = build_server(GLOSS_PROVIDER="anthropic", GLOSS_FALLBACKS="deepseek,local",
                           GLOSS_KB=str(tmp_path / "not-built.json"))
+    assert [name for name, _, _ in server.LINKS] == ["anthropic", "deepseek", "local"]
+    assert len(server.GLOSSARY) == 0 and len(server.NOTES) > 0
+
+
+def test_an_empty_local_link_is_dropped_rather_than_blocking_the_boot(build_server, tmp_path) -> None:
+    """Both halves empty is benign, and still must not refuse the boot. A pack
+    with no headings indexes to nothing: recall.py needs a heading to name a
+    card with."""
+    pack = tmp_path / "headless"
+    pack.mkdir()
+    (pack / "00-notes.md").write_text("Just some prose with no heading anywhere in it.\n")
+    server = build_server(GLOSS_PROVIDER="anthropic", GLOSS_FALLBACKS="deepseek,local",
+                          GLOSS_SESSION=str(pack), GLOSS_KB=str(tmp_path / "not-built.json"))
     assert [name for name, _, _ in server.LINKS] == ["anthropic", "deepseek"]
 
 
@@ -352,13 +401,22 @@ async def test_the_glossary_paints_before_any_model_is_asked(with_glossary, vend
     interviewer is still talking and reading it afterwards."""
     with_glossary.transcript.append(JARGON_TURN)
     await with_glossary.preview(JARGON_TURN[1])
-    assert only_card(with_glossary)["label"] == "Kestrel"
+    assert card_of_kind(with_glossary, "jargon")["label"] == "Kestrel"
+    assert vendor.calls == [], "the preview called out to a vendor"
+
+
+async def test_the_notes_paint_before_any_model_is_asked(with_glossary, vendor) -> None:
+    """The pack is parsed at startup and indexed in memory, so a recall card no
+    longer has to wait 1.5s for a vendor to write it."""
+    with_glossary.transcript.append(JARGON_TURN)
+    await with_glossary.preview(JARGON_TURN[1])
+    assert card_of_kind(with_glossary, "recall")["detail"] == "Kestrel is the deploy gate."
     assert vendor.calls == [], "the preview called out to a vendor"
 
 
 async def test_the_preview_does_not_replace_the_model_call(with_glossary, vendor) -> None:
-    """Whether a turn also deserves a recall card cannot be known without
-    asking, and recall is the more useful kind. The preview buys latency, not
+    """The indexes match words that were literally said; the model reads what
+    was meant, and that is still the better card. The preview buys latency, not
     tokens."""
     vendor.cards(CARD)
     with_glossary.transcript.append(JARGON_TURN)
@@ -370,14 +428,35 @@ async def test_the_preview_does_not_replace_the_model_call(with_glossary, vendor
 async def test_a_preview_the_model_confirms_is_not_retracted(with_glossary, vendor) -> None:
     """Same topic id means the model corroborated it: one card, updated in
     place, with the full TTL."""
+    vendor.cards(
+        {"id": "kestrel", "kind": "jargon", "label": "Kestrel",
+         "detail": "Their gate; raised twice, likely a real constraint."},
+        {"id": "notes", "kind": "recall", "label": "Notes",
+         "detail": "You wrote that Kestrel is the deploy gate."},
+    )
+    with_glossary.transcript.append(JARGON_TURN)
+    await with_glossary.preview(JARGON_TURN[1])
+    await with_glossary.enrich()
+
+    assert not any(m.get("type") == "expire" for m in with_glossary.sent)
+    assert card_of_kind(with_glossary, "jargon")["detail"].startswith("Their gate")
+
+
+async def test_only_the_uncorroborated_half_of_a_preview_is_retracted(with_glossary, vendor) -> None:
+    """The preview now paints two cards, and the model may confirm one of them.
+
+    Retraction is per id and always was, which is what makes this work without
+    a change: the confirmed card updates in place and the other comes down.
+    """
     vendor.cards({"id": "kestrel", "kind": "jargon", "label": "Kestrel",
                   "detail": "Their gate; raised twice, likely a real constraint."})
     with_glossary.transcript.append(JARGON_TURN)
     await with_glossary.preview(JARGON_TURN[1])
     await with_glossary.enrich()
 
-    assert not any(m.get("type") == "expire" for m in with_glossary.sent)
-    assert only_card(with_glossary)["detail"].startswith("Their gate")
+    expires = [m for m in with_glossary.sent if m.get("type") == "expire"]
+    assert expires[-1]["ids"] == ["notes"], "the confirmed card was retracted too"
+    assert card_of_kind(with_glossary, "jargon")["detail"].startswith("Their gate")
 
 
 async def test_a_preview_the_model_contradicts_is_retracted(with_glossary, vendor) -> None:
@@ -391,7 +470,7 @@ async def test_a_preview_the_model_contradicts_is_retracted(with_glossary, vendo
 
     expires = [m for m in with_glossary.sent if m.get("type") == "expire"]
     assert expires, "the unconfirmed preview was left standing"
-    assert expires[-1]["ids"] == ["kestrel"]
+    assert expires[-1]["ids"] == ["kestrel", "notes"]
 
 
 async def test_a_quiet_turn_retracts_the_preview(with_glossary, vendor) -> None:
@@ -403,7 +482,7 @@ async def test_a_quiet_turn_retracts_the_preview(with_glossary, vendor) -> None:
     await with_glossary.enrich()
 
     expires = [m for m in with_glossary.sent if m.get("type") == "expire"]
-    assert expires and expires[-1]["ids"] == ["kestrel"]
+    assert expires and expires[-1]["ids"] == ["kestrel", "notes"]
 
 
 async def test_a_turn_the_glossary_does_not_know_paints_nothing(with_glossary) -> None:

@@ -583,22 +583,36 @@ generated: every correction it makes, with its surrounding turn, is one.
 
 #### The fallback chain
 
-The chain's last link is **not a model at all**. `local` answers from a
-glossary built offline from books already on disk — no network, no tokens,
-microseconds. It is the floor under the chain: it runs only when every vendor
-above it has failed, and it can only ever emit `jargon` cards, because a
-`recall` card claims the person's own notes say something and a book is not
-their notes.
+The chain's last link is **not a model at all**. `local` answers from two
+indexes already in memory — no network, no tokens, microseconds. It is the
+floor under the chain: it runs only when every vendor above it has failed.
+
+| index | built from | emits | module |
+|---|---|---|---|
+| glossary | books on disk, read once offline | `jargon` | `kb.py` |
+| notes | this call's prep pack, indexed at startup | `recall` | `recall.py` |
+
+The split is a correctness rule, not a preference. A `recall` card claims the
+person's own notes say something, and a book is not their notes — so the
+glossary can only ever emit `jargon`, and the pack can only ever emit `recall`.
+Each index is confined to the claim its corpus can actually support.
+
+**Recall is first on the wire and therefore first on screen.** When both fire,
+the note the person wrote for this specific call is the one worth the glance.
 
 **It is a floor, not a first pass.** Putting it in front of the models would
-suppress recall cards, which are the more valuable kind and which only a model
-can write.
+trade the better card for a faster one: the indexes match words that were
+literally said, the model reads what was meant.
 
-**A glossary miss reports the vendor's failure, not its own.**
+**A local miss reports the vendor's failure, not its own.**
 `with_fallbacks()` re-raises only the last link's exception, and the last link
-is the glossary — so without care, "no glossary term in this turn" is what
+is `local` — so without care, "nothing local matched this turn" is what
 reaches the screen during a total outage. Each link records its failure for the
 turn, and the error card names the first one with a recognisable reason.
+
+**Either half alone keeps the link.** The glossary is optional and most
+deployments will never run the builder; every deployment has a prep pack. The
+link is dropped only when both indexes are empty.
 
 #### The instant preview — latency, not tokens
 
@@ -635,11 +649,15 @@ Same topic id, so the second updates the first **in place** — one card, better
 text, no flash. That is what the S4 card lifecycle was built for, and this is
 the first thing to depend on it.
 
-**It does not replace the model call, and that is the point.** Whether a turn
-also deserves a `recall` card — the more useful kind, and the one only a model
-can write — cannot be known without asking. A glossary that answered *instead*
-of the model would trade the better card for a faster one. So this buys
-**latency, not tokens**: the model is asked either way.
+**It does not replace the model call, and that is the point.** The indexes
+match words that literally appear; the model reads what was meant, over the
+whole conversation, and that is still the better card. Answering *instead* of
+the model would trade it for a faster one. So this buys **latency, not
+tokens**: the model is asked either way.
+
+*(An earlier version of this paragraph said a `recall` card was "the one only a
+model can write". That was true while the only local corpus was a shelf of
+books. It stopped being true when the prep pack itself was indexed — see below.)*
 
 **An unconfirmed preview is retracted, not left to time out.** The preview is a
 keyword match; the model read the whole conversation. If the model's cards do
@@ -726,6 +744,82 @@ during the outage it exists for. A link whose credential is simply unset refuses
 even earlier, before any call. During a genuine vendor outage the escape is
 explicit: point `GLOSS_PROVIDER` at a link that answers and set
 `GLOSS_FALLBACKS=` empty.
+
+#### The prep pack, indexed — recall without a vendor, measured 2026-08-27
+
+The section above rules out retrieval over **books**. It does not rule out
+retrieval over the **prep pack**, and treating the two as one question left the
+outage behaviour backwards: with both vendors down, gloss could still define a
+term it read in a book, but could not reach the notes the person wrote for the
+call that was happening. Those are the highest-value words in the system, and
+they were already parsed and resident in memory.
+
+**The objection does not carry across.** It was about *definitions* — prose
+that mentions a term is not prose that defines it, and no ranking turns a
+mention into a definition. A recall card makes no such claim. Its job is to put
+back on screen something the person already wrote, and the system prompt's rule
+("never invent a fact, a number, or an anecdote that is not written there") is
+satisfied by construction: `detail` is a span copied out of the pack. `recall.py`
+has no path that generates text. It cuts a long line rather than summarising it,
+because summarising is generating.
+
+**Why this is scored overlap and phrase matching is not.** `Glossary.lookup`
+holds that a term either appears or it does not, which is right for a
+dictionary and wrong here. "Tell me about a time you brought down latency on a
+read path" shares no exact phrase with a note headed "Latency on a hot read
+path" — a phrase matcher stays silent on precisely the turn this exists for.
+Speech restates; notes do not.
+
+So the safety moves into three refusal rules instead:
+
+1. **Two matched words, or one *name* unique to a single section.**
+2. **A word indexes only if it appears in at most half the sections** — a
+   stoplist derived from the pack rather than maintained by hand, because
+   "engineering" is distinctive in one pack and noise in another, and only the
+   pack knows which. A second, small deny-list catches speech filler that is
+   rare in a pack and meaningless in a sentence.
+3. **A tie wins nothing.** Two sections matching equally well means the turn
+   does not distinguish them, and the wrong story on screen looks exactly as
+   confident as the right one.
+
+**Rule 1 originally said "one word unique to a section", and that was measured
+wrong.** Three of fifteen off-topic turns produced a card: "hand" out of
+"hand-rolled", "second" out of "a second path", "next" out of "next time". Each
+appears exactly once in the pack, so each alone was enough — and "I'll hand over
+to my colleague now" answered itself with a rehearsed anecdote about partner
+integrations. Rarity *inside a pack* is not rarity *in English*, and the
+difference is almost exactly proper-nounhood. `keyterms.py` already draws that
+line by position rather than by a word list, having had to solve the same
+problem for the recogniser, so the line is drawn once and imported.
+
+Measured on `sessions/example` after the fix:
+
+| turns | cards emitted |
+|---|---|
+| 18 off-topic (greetings, logistics, hand-offs, generic openers) | **0** |
+| 7 on-topic (restated in words the notes do not use) | **7** |
+
+| operation | cost |
+|---|---|
+| index build, 8 sections | 1.1 ms, once at startup |
+| lookup | 22µs median, 25µs p95 |
+
+**What it costs the design: nothing new is exposed.** The pack is already the
+system prompt and already reaches the screen as model-written recall cards.
+This quotes the same bytes by a shorter route, and `tools/check_pack.py`
+remains the single gate on what a pack may contain.
+
+**The one accepted cost is card identity.** A recall card's `id` is the
+section's slug, so it is stable across every turn that returns to that story —
+which is what lets the display update in place. It rarely matches the id a
+model would choose for the same topic, so a recall preview is usually
+expired-and-replaced by the model's card rather than updated in place. Both
+messages are sent together, so there is no flash; stability across turns is
+worth more than the merge.
+
+**A section needs a heading.** Text before the first heading in a pack is not
+indexed, because a card needs a name and an unnamed preamble has none to give
+it. This is now a rule for writing packs — see `sessions/README.md`.
 
 #### What a failure means — `failures.py`
 

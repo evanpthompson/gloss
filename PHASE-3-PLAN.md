@@ -619,6 +619,55 @@ an unconfirmed guess fades even if the enrichment pass never returns.
 **This is the first feature that depends on the card lifecycle from S4.** Before
 it, painting twice in one turn would simply have flashed twice.
 
+### S7 — The prep pack, indexed (done 2026-08-27)
+
+S5 gave the chain a floor and stopped at half of one. The split it enforced —
+books may only ever produce `jargon`, because a book is not the person's notes
+— was and remains correct. What was wrong was concluding that `recall` was
+therefore beyond any local link. The pack **is** their notes, it is a few
+thousand tokens, and it was already parsed and resident in memory since S1.
+
+So the outage behaviour was backwards: with both vendors down, gloss could
+still define a term it read in a book, and could not reach the notes written
+for the call that was happening.
+
+`recall.py` indexes the pack by heading and answers from it. It only ever
+quotes — a long line is cut, never summarised, because summarising is
+generating — so the system prompt's "never invent a fact that is not written
+there" holds by construction rather than by instruction.
+
+**Scored overlap, not phrase matching, and the safety moved accordingly.**
+"Tell me about a time you brought down latency on a read path" shares no exact
+phrase with a note headed "Latency on a hot read path": a phrase matcher is
+silent on the one turn this exists for. So matching is on shared distinctive
+words, gated by three refusal rules — two matched words (or one *name* unique
+to a section), a stoplist derived from the pack's own word frequencies rather
+than maintained by hand, and a strict tie rule that emits nothing when two
+sections match equally well.
+
+**The name requirement came from a measurement, not from theory.** The first
+cut allowed any single word unique to a section, and 3 of 15 off-topic turns
+produced a card: "hand" from "hand-rolled", "second" from "a second path",
+"next" from "next time". "I'll hand over to my colleague now" answered itself
+with a rehearsed anecdote. Rarity in a pack is not rarity in English; the
+difference is proper-nounhood, and `keyterms.py` already draws that line by
+position for the recogniser, so it is imported rather than restated.
+
+| after the fix, on `sessions/example` | result |
+|---|---|
+| 18 off-topic turns | 0 cards |
+| 7 on-topic turns, restated in words the notes do not use | 7 cards |
+| index build, 8 sections | 1.1 ms at startup |
+| lookup | 22µs median, 25µs p95 |
+
+Both halves also paint in the S6 preview, so a recall card no longer waits
+1.5s for a vendor to write it. The local link keeps its place in the chain if
+**either** half has content: the glossary is optional and most deployments
+never run the builder, but every deployment has a pack.
+
+The tests that gate it were confirmed by planting the old rule back and
+watching both fail.
+
 ## Open questions
 
 1. ~~**Is DeepSeek's context caching automatic, and does it need any

@@ -6,11 +6,13 @@ notes you wrote before the call, matched to what was just said, and a flag on
 any term you don't recognize. It does not answer for you — see `SPEC.md`
 §Name for why it isn't called what it used to be called.
 
-**Status as of 2026-08-25.** Phases 1–3 are complete and Phase 4a is built:
+**Status as of 2026-08-27.** Phases 1–3 are complete and Phase 4a is built:
 audio pipe, turn-end enrichment with cards on a second screen, prompt caching,
-a three-link provider chain ending in a local glossary, cards that persist while
-their topic is live, and a presenter clicker to drive them. Phase 4b (HUD mode)
-is specced and not built. 194 tests gate all of it in CI.
+a three-link provider chain whose floor is two local indexes — your prep pack
+for `recall`, a book-built glossary for `jargon` — cards that persist while
+their topic is live, and a presenter clicker to drive them. Both vendors can be
+out and the call still gets cards. Phase 4b (HUD mode) is specced and not
+built. 217 tests gate all of it in CI.
 
 `SPEC.md` carries the design and every measurement behind it, including the
 things deliberately **not** built and the data that justified not building them.
@@ -171,10 +173,23 @@ turn-taking rather than a question), `GLOSS_MAX_TRANSCRIPT_TOKENS`,
 `GLOSS_CARD_TTL_S`, `GLOSS_ERROR_TTL_S`, `GLOSS_PREVIEW`, `GLOSS_KB`,
 `GLOSS_KEYTERM_BUDGET`, `GLOSS_CACHE_TTL`, `GLOSS_LOG_CACHE`.
 
-## Local knowledge base (optional)
+## Local knowledge base
 
-The chain's last link answers from a glossary built offline from books on disk
-— no model, no network, no tokens. Build it once:
+The chain's last link is not a model. It answers from two indexes held in
+memory — no network, no tokens, ~22µs:
+
+| index | built from | emits | needs setup? |
+|---|---|---|---|
+| notes | your prep pack, indexed at startup | `recall` | no |
+| glossary | books on disk, read once offline | `jargon` | yes, below |
+
+The notes index needs nothing: point `GLOSS_SESSION` at a pack and it works.
+Write the pack in **headed sections** — a card is named by its heading, and text
+before the first heading is not indexed. See `sessions/README.md`.
+
+### The glossary half (optional)
+
+Built offline from books on disk. Build it once:
 
 ```bash
 uv run python tools/build_kb.py ~/files/automation/resources/project_books --estimate
@@ -186,8 +201,9 @@ above `--max-cost` (default $2). The output is `kb/glossary.json`, which is
 gitignored: it is reproducible from the builder, and it is derived from books
 that are not ours to redistribute.
 
-Without it, the `local` link is dropped with a warning and the chain runs on
-its vendors alone.
+Without it the chain still keeps its `local` link, serving `recall` from your
+pack alone. The link is dropped with a warning only when both halves are empty
+— no glossary built *and* a pack with no headed sections.
 
 ## Clicker control
 
@@ -236,6 +252,7 @@ pass.
 | `test_providers.py` | unit | the provider allow-list and its refusals |
 | `test_chain.py` | integration | the fallback chain through the real SDKs |
 | `test_kb.py` | unit | the local glossary — mostly what it refuses to answer |
+| `test_recall.py` | unit | the prep-pack index — mostly what it refuses to answer |
 | `test_eviction.py` | unit | the transcript ceiling, and what crossing it costs |
 | `test_display.py` | browser | card lifecycle in `display.html`, in real Chromium |
 
@@ -249,10 +266,6 @@ project's own tests pass.
   screen: meaning carried by form and position before any word is read, and
   ultimately a transparent overlay. Specced in `SPEC.md` § 4b, with the reading
   research that constrains it and a test to run before writing any code.
-- **Recall cards from the prep pack when every vendor is out.** The local
-  glossary serves `jargon` only, so a total outage leaves the notes written for
-  that specific call unreachable — which is backwards. Small: the pack is
-  already loaded at startup and `kb.Glossary` has the lookup shape to copy.
 - **Tier 2 post-call research export.** Unchanged from the original plan and
   still not started.
 - **Physical verification.** Clicker keycodes, two-laptop capture, real

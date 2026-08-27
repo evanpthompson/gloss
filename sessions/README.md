@@ -33,6 +33,14 @@ only quote what is in these files. "Talk about the latency work" produces
 nothing useful at a glance; the actual numbers and the actual caveat produce a
 card you can read in a second.
 
+**Write in headed sections, and give each one a real name.** A heading is not
+decoration here: `recall.py` indexes the pack so recall cards survive a total
+vendor outage, and the section it matches supplies the card's label and its
+identity across turns. Text before the first heading is not indexed at all,
+because a card needs a name and an unnamed preamble has none to give it.
+"Latency on a hot read path" makes a card you can read; "Notes" makes one you
+cannot. Keep headings to about six words — longer ones are trimmed.
+
 **Longer is genuinely better here, up to a point.** Every provider has a
 minimum prefix size below which it never caches, and all of them fail silently
 — no error, the counters just stay at zero. The floor per provider lives in
