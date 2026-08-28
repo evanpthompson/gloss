@@ -493,21 +493,78 @@ times out for 9 of 14 trials. Those rest on response rate and reaction time,
 neither of which is affected by the exposure confound. Everything that rested
 on the accuracy columns is withdrawn.
 
-**Run 3 needs a different instrument, not more trials.** Self-terminated
-exposure is the flaw: it conflates "how long until you had it" with "how long
-you chose to look", and it hands the slowest conditions the longest look. The
-fix is **fixed exposure** — show the card for N ms, remove it, then probe — and
-vary N to find the exposure each condition needs to be answered reliably. That
-measures the actual HUD question ("how long does this have to be on screen"),
-controls exposure so accuracy becomes interpretable, and removes the timeout
-category entirely. Probes also need distractors drawn from material only the
-card could supply.
+**Run 3 needs a different instrument, not more trials — built 2026-08-28,
+`tools/exposure_test.html`.** Self-terminated exposure was the flaw: it
+conflates "how long until you had it" with "how long you chose to look", and it
+hands the slowest conditions the longest look. So exposure is now fixed. The
+card is shown for exactly N ms, removed, masked, and then probed. Every
+condition gets the same N on a given trial, there is no timeout category, and
+accuracy is a statement about legibility again. It also asks the question the
+HUD actually poses — *how long does this have to be on screen* — rather than
+*how long did you choose to look*.
+
+| | run 1–2 (`glance_test.html`) | run 3 (`exposure_test.html`) |
+|---|---|---|
+| exposure | participant decides, 8s ceiling | fixed: 150 / 350 / 800 / 2000 ms |
+| after the card | straight to the probe | 250 ms glyph mask |
+| conditions | today, one, scroll, rsvp | today, one, **column** |
+| detail probe | gist pair | an arbitrary specific — a number, a schedule |
+| headline metric | reaction time | % correct at each exposure |
+
+**Three design decisions inside it, each answering a way the last one failed.**
+
+*Only static conditions.* `scroll` and `rsvp` are gone, and not because they
+lost. Exposure duration is not a meaningful independent variable for a display
+whose content unfolds over time: a marquee at 150 ms is a fragment of one word
+and RSVP at 150 ms is one word of thirty. That is not a shorter version of the
+condition, it is a truncation of it. Both were also settled well enough by runs
+1–2 — `scroll` was completed 0 times in 14.
+
+*A mask after every exposure.* Without one, a 150 ms presentation is still
+readable off the afterimage, and the short durations would measure iconic
+memory rather than the display.
+
+*A built-in control on the probe.* `one` and `column` display **no detail at
+all**, so both must land near 50% on the detail probe. If either is well above
+chance, the probe is leaking and the detail numbers cannot be read. That is
+precisely the failure that ended the previous instrument, and it is now
+detectable from inside the results rather than by noticing it a run later.
+
+**The corpus changed with it.** `gist` probes are retired — run 2 proved them
+answerable by inference — and replaced with `fact` probes whose answer is
+arbitrary: *raised twice this quarter* against *raised once last year*, *3 of 5*
+against *2 of 7*. No amount of domain knowledge recovers those; the only way to
+have one is to have read it. Each `detail` line was rewritten to carry one such
+specific, which means **`today`'s stimulus changed after run 2 and run 3 is not
+comparable to runs 1–2 on detail-dependent measures.** A valid probe was worth
+more than comparability with a condition that was already losing.
+
+**Verified before anyone runs it,** the same way the last one was: 24 trials
+across 12 cells at n=2, 24 distinct items, masks shown, and — measured —
+exposure drift of 0–17 ms with a median of one frame at 60 Hz and no exposure
+more than two frames late. Two bugs were caught doing it. `column` was
+rendering a detail line, which would have made it *`today` plus neighbours*
+rather than *`one` plus neighbours* and destroyed the control described above.
+And neighbouring rows were drawn from the whole corpus, where three of the
+term distractors (`Backfill`, `Backpressure`, `Load shedding` — deliberately
+confusable near-misses) are themselves corpus terms, so a neighbour could have
+displayed the wrong answer and turned the identity probe into a coin flip about
+which row a word had been on. Neighbours now exclude the trial's own
+distractor; 0 leaks in 6,400 draws.
+
+**What run 3 can and cannot settle.** At 2 repeats per cell it is 24 trials and
+a pilot, and single cells are noise — the per-condition column is the readable
+part. What it *can* do that neither previous run could is say whether a number
+is a measurement at all, because the control conditions have to sit at chance
+for the rest of the table to mean anything.
 
 **What run 2 would fix, if 4b needs firmer ground:** raise the ceiling to ~15s
 so `today` stops being censored at 3 of 7; add unfamiliar terms with
 call-specific distractors so the content probe measures the card rather than the
 participant; and add a second participant, since one person's reading speed is
-currently the entire dataset.
+currently the entire dataset. *(Written after run 1. Run 2 supplied the second
+participant and made the middle item urgent rather than optional; the ceiling
+question was overtaken by dropping the ceiling entirely — see run 3 below.)*
 
 **What was fixed in the instrument because of this run.** `scroll` returned a
 median of `0 ms` — the median of an empty list, rendered as though it were the

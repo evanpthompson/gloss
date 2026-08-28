@@ -225,6 +225,16 @@ exposure rather than legibility and are withdrawn. Response rate and reaction
 time are unaffected and are what the conclusions rest on.
 
 ```bash
+open tools/exposure_test.html   # run 3: the current instrument
+```
+
+**Run this one, not the glance test.** The card appears for a fixed time,
+disappears behind a mask, and then you answer two questions — one about the
+term, one about an arbitrary specific only the card could have told you. Fixed
+exposure is what makes the accuracy numbers mean anything; the glance test is
+kept as the record of runs 1–2, not for new work. About five minutes.
+
+```bash
 open tools/wheel_hud.html       # the display both participants preferred
 ```
 
@@ -232,6 +242,15 @@ A prototype, not a result: one term per row, wheel or arrow keys or the clicker
 to move, five rows with the focus at full opacity and its neighbours fading
 out, detail on dwell. Sliders along the bottom set the opacity gradient and the
 dwell delay and print the settings as JSON. Nothing here has been measured.
+
+### The tools, and which is current
+
+| file | what it is |
+|---|---|
+| `tools/exposure_test.html` | **run 3, current.** Fixed exposure, masked, arbitrary-fact probe |
+| `tools/glance_test.html` | runs 1–2. Self-terminated; its accuracy columns are withdrawn |
+| `tools/wheel_hud.html` | prototype of the preferred display. Not measured |
+| `tools/cards_corpus.js` | the 32 cards all three share, and what each probe does not measure |
 
 ## Clicker control
 

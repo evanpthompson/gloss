@@ -1,0 +1,380 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>gloss — exposure test</title>
+<script src="cards_corpus.js"></script>
+<!--
+  Run 3's instrument. It replaces glance_test.html rather than extending it,
+  because run 2 showed the flaw was the design and not the sample size.
+
+  WHAT WENT WRONG BEFORE. The glance test let the participant decide when the
+  card came off — press SPACE when you have it. On a timeout the card stayed up
+  for the full 8-second ceiling, so the trials nobody could finish were also the
+  trials with the longest look. Accuracy then ran INVERSELY to completion: the
+  second participant's best comprehension scores, 100% on both probes, were on
+  the two conditions she completed 1-of-7 and 0-of-7 times. The metric was
+  measuring exposure.
+
+  THE FIX. Exposure is fixed and controlled: the card is shown for exactly N
+  milliseconds, removed, masked, and then probed. Every condition gets the same
+  N on a given trial, there is no timeout category, and accuracy becomes a
+  statement about legibility again. It also asks the question the HUD actually
+  poses — "how long does this have to be on screen" — rather than "how long did
+  you choose to look".
+
+  WHY ONLY STATIC CONDITIONS. `scroll` and `rsvp` are gone. Exposure duration is
+  not a meaningful independent variable for a display whose content unfolds over
+  time: a marquee at 150ms shows a fragment of one word, and RSVP at 150ms is
+  one word of thirty. Neither is that condition, it is a truncation of it. They
+  were also both settled well enough by runs 1-2 — scroll was completed 0 times
+  in 14 — so what remains is a comparison among the static candidates.
+
+  `column` is the third condition, and it is new: the focused row of the design
+  both participants chose (tools/wheel_hud.html), with its faded neighbours.
+  The question it settles is whether the surrounding rows cost anything.
+
+  A MASK follows every exposure. Without one, a 150ms presentation can still be
+  read off the afterimage, and the short durations would measure iconic memory
+  rather than the display.
+
+  Open fullscreen on the second screen, at the distance you actually sit.
+-->
+<style>
+  :root {
+    --bg: #0f1115; --fg: #e8e8ea; --dim: #6b7280;
+    --recall: #7dd3a0; --jargon: #f0b45f;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: var(--bg); color: var(--fg); min-height: 100vh;
+    font: 16px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    display: flex; flex-direction: column; padding: 3vh 3vw; gap: 2vh;
+  }
+  #stage { flex: 1; display: flex; flex-direction: column; justify-content: center; }
+
+  /* Card CSS copied from display.html, as in the glance test — the size on the
+     real screen is the thing being measured, so it cannot be approximated. */
+  .card { border-left: 4px solid var(--jargon); padding: 1.4vh 0 1.4vh 1.6vw; }
+  .label { font-size: clamp(20px, 3.2vw, 46px); font-weight: 600; letter-spacing: -0.01em; }
+  .detail { font-size: clamp(13px, 1.4vw, 21px); color: var(--dim); margin-top: 0.5vh; }
+  .tag {
+    font-size: clamp(10px, 0.85vw, 13px); text-transform: uppercase;
+    letter-spacing: 0.12em; color: var(--jargon); margin-bottom: 0.4vh;
+  }
+  /* The wheel-HUD column, held still. Same gradient as wheel_hud.html. */
+  .col .row { padding: 0.5vh 0 0.5vh 1.2vw; border-left: 3px solid transparent; white-space: nowrap; }
+  .col .row[data-d="0"] { opacity: 1;    font-size: clamp(22px, 3.4vw, 50px); font-weight: 600;
+                          border-left-color: var(--jargon); }
+  .col .row[data-d="1"] { opacity: 0.85; font-size: clamp(16px, 2.1vw, 30px); }
+  .col .row[data-d="2"] { opacity: 0.45; font-size: clamp(13px, 1.5vw, 21px); }
+  .col .detail { margin-top: 1vh; margin-left: 1.2vw; }
+
+  #fix { font-size: 48px; color: var(--dim); text-align: center; }
+  /* The mask covers the region the card occupied, in the same two type sizes,
+     so it interrupts both the label and the detail. */
+  #mask { color: #3f4654; user-select: none; }
+  #mask .m1 { font-size: clamp(20px, 3.2vw, 46px); font-weight: 600; }
+  #mask .m2 { font-size: clamp(13px, 1.4vw, 21px); margin-top: 0.5vh; }
+
+  #probe { display: flex; flex-direction: column; gap: 2.4vh; align-items: center; }
+  #question { font-size: clamp(16px, 1.8vw, 24px); color: var(--dim); }
+  #choices { display: flex; gap: 2vw; }
+  .choice {
+    background: #1a1d24; color: var(--fg); border: 2px solid #2a2f3a; border-radius: 8px;
+    padding: 1.6vh 2vw; font: inherit; font-size: clamp(15px, 1.6vw, 22px); cursor: pointer;
+    min-width: 22vw;
+  }
+  .choice:hover { border-color: var(--jargon); }
+  .choice kbd { display: block; font-size: 11px; color: var(--dim); letter-spacing: 0.1em;
+                text-transform: uppercase; margin-bottom: 0.6vh; }
+
+  #intro, #done { max-width: 66ch; margin: 0 auto; display: flex; flex-direction: column; gap: 1.6vh; }
+  h1 { font-size: 22px; font-weight: 600; }
+  p, li { font-size: 15px; color: #c3c7cf; }
+  ul { padding-left: 1.2em; display: flex; flex-direction: column; gap: 0.4em; }
+  label { font-size: 14px; color: var(--dim); display: flex; gap: 0.6em; align-items: center; }
+  input[type=number] { background: #1a1d24; color: var(--fg); border: 1px solid #2a2f3a;
+                       border-radius: 5px; padding: 5px 8px; font: inherit; width: 6em; }
+  button.go { background: var(--recall); color: #0f1115; border: 0; border-radius: 8px;
+              padding: 12px 22px; font: inherit; font-weight: 600; cursor: pointer; align-self: flex-start; }
+  #bar { font-size: 12px; color: var(--dim); text-align: center; }
+  table { border-collapse: collapse; font-size: 14px; width: 100%; }
+  th, td { text-align: right; padding: 6px 10px; border-bottom: 1px solid #232833; }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--dim); font-weight: 500; }
+  caption { text-align: left; color: var(--dim); font-size: 13px; padding-bottom: 6px; }
+  textarea { width: 100%; height: 20vh; background: #1a1d24; color: #c3c7cf; border: 1px solid #2a2f3a;
+             border-radius: 6px; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; padding: 10px; }
+  .thin { color: #8b5cf6; }
+  .hidden { display: none !important; }
+</style>
+
+<div id="stage">
+  <div id="intro">
+    <h1>gloss — exposure test (run 3)</h1>
+    <p>Asks the question a HUD actually poses: <strong>how long does a card have
+      to be on screen before you can say what it was?</strong> The card appears
+      for a fixed time, disappears, and then you answer. There is nothing to
+      press while it is up, and nothing to wait out.</p>
+    <ul>
+      <li>Second screen, fullscreen, the distance you actually sit.</li>
+      <li>A <strong>+</strong>, then a card, then a block of nonsense that wipes
+        the afterimage. Look at the <strong>+</strong> and keep still.</li>
+      <li>Two questions per card: which term, and one specific detail.
+        <kbd>F</kbd> / <kbd>J</kbd> or click. <strong>Guess when you did not
+        catch it</strong> — a guess is data, a blank is not.</li>
+      <li>Some exposures are far too short to read. That is deliberate; do not
+        take it as a failure.</li>
+      <li>Three practice cards first, not recorded.</li>
+    </ul>
+    <label>Viewing distance, cm <input type="number" id="distance" value="75" min="20" max="400"></label>
+    <label>Repeats per cell <input type="number" id="reps" value="2" min="1" max="2"></label>
+    <button class="go" id="start">Start</button>
+  </div>
+
+  <div id="fix" class="hidden">+</div>
+  <div id="card" class="hidden"></div>
+  <div id="mask" class="hidden"></div>
+
+  <div id="probe" class="hidden">
+    <div id="question"></div>
+    <div id="choices">
+      <button class="choice" id="c0"><kbd>F</kbd><span></span></button>
+      <button class="choice" id="c1"><kbd>J</kbd><span></span></button>
+    </div>
+  </div>
+
+  <div id="done" class="hidden">
+    <h1>Result</h1>
+    <div id="tables"></div>
+    <p id="read"></p>
+    <textarea id="json" readonly></textarea>
+    <button class="go" id="again">Run again</button>
+  </div>
+</div>
+<div id="bar"></div>
+
+<script>
+const CARDS = window.GLOSS_CARDS;
+if (!Array.isArray(CARDS) || !CARDS[0] || !CARDS[0].fact) {
+  document.body.innerHTML = "<p style='padding:4vh'>cards_corpus.js did not load, or predates the " +
+    "`fact` probes — open this file from the tools/ directory it ships in.</p>";
+  throw new Error("corpus missing or stale");
+}
+
+// Static conditions only. See the header comment for why scroll and rsvp are
+// not here: a timed exposure of a time-unfolding display is a truncation of it,
+// not a shorter version of it.
+const CONDITIONS = ["one", "today", "column"];
+// Log-ish spacing from "glimpse" to "proper look". The top of the range is
+// deliberately short of what a 20-word detail line needs at normal reading
+// speed — if `today` never recovers its detail inside 2s, that is the argument
+// for Direction 2 stated as a measurement rather than as a preference.
+const DURATIONS = [150, 350, 800, 2000];
+const MASK_MS = 250;
+
+const $ = id => document.getElementById(id);
+const shuffle = xs => { const a = xs.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
+const median = xs => { if (!xs.length) return null; const a = xs.slice().sort((p, q) => p - q); const m = a.length >> 1; return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2; };
+const show = (...ids) => { for (const el of ["intro", "fix", "card", "mask", "probe", "done"]) $(el).classList.toggle("hidden", !ids.includes(el)); };
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+let results = [];
+
+function render(item, condition, neighbours) {
+  const card = $("card");
+  card.className = "card";
+  if (condition === "one") {
+    card.innerHTML = `<div class="tag">unfamiliar term</div><div class="label"></div>`;
+    card.querySelector(".label").textContent = item.term;
+    return;
+  }
+  if (condition === "today") {
+    card.innerHTML = `<div class="tag">unfamiliar term</div><div class="label"></div><div class="detail"></div>`;
+    card.querySelector(".label").textContent = item.label;
+    card.querySelector(".detail").textContent = item.detail;
+    return;
+  }
+  // column: the wheel HUD at rest — the focused term with its faded
+  // neighbours, and NO detail line. Detail in that design appears on dwell,
+  // which is by definition not what a fixed exposure shows.
+  //
+  // Keeping it out is also what makes the comparison mean anything. With the
+  // detail in, `column` would be `today` plus neighbours and there would be no
+  // clean contrast; without it, `one` vs `column` isolates exactly one thing —
+  // what the surrounding rows cost — and `column` joins `one` as a condition
+  // that displays no detail at all, which is the built-in control on the fact
+  // probe. Two conditions that cannot possibly answer it must score at chance;
+  // if they do not, the probe is leaking, which is the failure that ended the
+  // previous instrument.
+  card.className = "card col";
+  const order = [neighbours[0], neighbours[1], item.term, neighbours[2], neighbours[3]];
+  card.innerHTML = order.map((t, i) => `<div class="row" data-d="${Math.abs(i - 2)}"></div>`).join("");
+  card.querySelectorAll(".row").forEach((el, i) => { el.textContent = order[i]; });
+}
+
+// Shown for a measured number of frames rather than a setTimeout, and the
+// achieved duration is recorded. A dropped frame that silently stretched a
+// 150ms exposure to 200ms would be indistinguishable from a real result.
+function flash(ms) {
+  return new Promise(resolve => {
+    show("card");
+    let t0 = null;
+    const step = t => {
+      if (t0 === null) t0 = t;
+      const elapsed = t - t0;
+      if (elapsed >= ms) { $("card").classList.add("hidden"); resolve(elapsed); }
+      else requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  });
+}
+
+const GLYPHS = "▚▞▓▙▟▛▜▖▗▘▝█▒░";
+function maskText(n) {
+  let out = "";
+  for (let i = 0; i < n; i++) out += GLYPHS[Math.floor(Math.random() * GLYPHS.length)];
+  return out;
+}
+
+function ask(question, correct, wrong) {
+  return new Promise(resolve => {
+    const flip = Math.random() < 0.5;
+    const options = flip ? [correct, wrong] : [wrong, correct];
+    const correctIndex = flip ? 0 : 1;
+    $("question").textContent = question;
+    $("c0").querySelector("span").textContent = options[0];
+    $("c1").querySelector("span").textContent = options[1];
+    show("probe");
+    const answer = i => {
+      window.removeEventListener("keydown", onKey);
+      $("c0").onclick = $("c1").onclick = null;
+      resolve(i === correctIndex);
+    };
+    const onKey = e => {
+      const k = e.key.toLowerCase();
+      if (k === "f") { e.preventDefault(); answer(0); }
+      if (k === "j") { e.preventDefault(); answer(1); }
+    };
+    window.addEventListener("keydown", onKey);
+    $("c0").onclick = () => answer(0);
+    $("c1").onclick = () => answer(1);
+  });
+}
+
+async function runTrial({ item, condition, ms, neighbours }, recorded) {
+  show("fix");
+  await sleep(600 + Math.random() * 500);
+
+  render(item, condition, neighbours);
+  const actual = await flash(ms);
+
+  $("mask").innerHTML = `<div class="m1">${maskText(26)}</div><div class="m2">${maskText(78)}</div>`;
+  show("mask");
+  await sleep(MASK_MS);
+  show();
+
+  const identity = await ask("Which term was on screen?", item.term, item.termDistractor);
+  const fact = await ask("Which detail did it give?", item.fact, item.factDistractor);
+
+  if (recorded) results.push({ condition, ms, actualMs: Math.round(actual), term: item.term, identity, fact });
+}
+
+async function run() {
+  const reps = Math.min(2, Math.max(1, parseInt($("reps").value, 10) || 2));
+  const cells = CONDITIONS.flatMap(c => DURATIONS.flatMap(ms => Array.from({ length: reps }, () => ({ c, ms }))));
+  const pool = shuffle(CARDS);
+  if (cells.length + CONDITIONS.length > pool.length) {
+    // Fail closed rather than reusing an item, which would let a trial be
+    // answered from having already seen that card.
+    $("bar").textContent = `corpus too small: need ${cells.length + CONDITIONS.length}, have ${pool.length}`;
+    return;
+  }
+
+  let next = 0;
+  const pick = () => pool[next++];
+  // Neighbours for the column condition come from other corpus terms, and
+  // never include this trial's own distractor -- three distractors ARE corpus
+  // terms (Backfill, Backpressure, Load shedding, all deliberately confusable
+  // near-misses), so an unfiltered neighbour could put the wrong answer on
+  // screen and turn the identity probe into a coin flip about which row it was.
+  const neighboursFor = item => shuffle(CARDS
+      .filter(c => c.term !== item.term && c.term !== item.termDistractor))
+    .slice(0, 4).map(c => c.term);
+
+  const practice = CONDITIONS.map(condition => {
+    const item = pick();
+    return { item, condition, ms: 800, neighbours: neighboursFor(item) };
+  });
+  const trials = shuffle(cells).map(({ c, ms }) => {
+    const item = pick();
+    return { item, condition: c, ms, neighbours: neighboursFor(item) };
+  });
+
+  results = [];
+  for (const t of practice) { $("bar").textContent = "practice — not recorded"; await runTrial(t, false); }
+  let at = 0;
+  for (const t of trials) { $("bar").textContent = `trial ${++at} of ${trials.length}`; await runTrial(t, true); }
+  $("bar").textContent = "";
+  report(reps);
+}
+
+function report(reps) {
+  const pct = xs => xs.length ? Math.round(100 * xs.filter(Boolean).length / xs.length) : null;
+  const cell = (c, ms) => results.filter(r => r.condition === c && r.ms === ms);
+
+  const grid = probe => {
+    const key = probe === "identity" ? "identity" : "fact";
+    return `<table><caption>${probe === "identity" ? "Which term was it" : "Which detail did it give"} — % correct` +
+      ` (n=${reps} per cell; 50% is chance)</caption>` +
+      `<tr><th>condition</th>${DURATIONS.map(d => `<th>${d} ms</th>`).join("")}<th>all</th></tr>` +
+      CONDITIONS.map(c => {
+        const all = pct(results.filter(r => r.condition === c).map(r => r[key]));
+        return `<tr><td>${c}</td>` +
+          DURATIONS.map(d => {
+            const v = pct(cell(c, d).map(r => r[key]));
+            return `<td class="${reps < 2 ? "thin" : ""}">${v === null ? "—" : v + "%"}</td>`;
+          }).join("") + `<td><strong>${all === null ? "—" : all + "%"}</strong></td></tr>`;
+      }).join("") +
+      `<tr><td>all conditions</td>${DURATIONS.map(d => {
+        const v = pct(results.filter(r => r.ms === d).map(r => r[key]));
+        return `<td>${v === null ? "—" : v + "%"}</td>`;
+      }).join("")}<td></td></tr></table>`;
+  };
+
+  const drift = results.map(r => r.actualMs - r.ms);
+  $("tables").innerHTML = grid("identity") + "<div style='height:2vh'></div>" + grid("fact");
+
+  const byCond = CONDITIONS.map(c => ({
+    condition: c,
+    identityPct: pct(results.filter(r => r.condition === c).map(r => r.identity)),
+    factPct: pct(results.filter(r => r.condition === c).map(r => r.fact)),
+  }));
+  const one = byCond.find(b => b.condition === "one");
+  const today = byCond.find(b => b.condition === "today");
+  const column = byCond.find(b => b.condition === "column");
+
+  $("read").textContent =
+    `Term recognition: one ${one.identityPct}%, today ${today.identityPct}%, column ${column.identityPct}%. ` +
+    `Detail: one ${one.factPct}%, today ${today.factPct}%, column ${column.factPct}%. ` +
+    `"one" and "column" display no detail at all, so both MUST land near 50% on it. ` +
+    `They are the control: if either is well above chance, the fact probe is leaking and ` +
+    `the detail numbers cannot be read — which is exactly how the previous instrument failed. ` +
+    `Exposure drift ${Math.min(...drift)} to ${Math.max(...drift)} ms (median ${median(drift)}); ` +
+    `anything past about 17 ms is a dropped frame, not a setting. ` +
+    `With ${reps} per cell this is a pilot — read the "all" column before any single cell.`;
+
+  $("json").value = JSON.stringify({
+    instrument: "exposure_test", ranAt: new Date().toISOString(),
+    repsPerCell: reps, conditions: CONDITIONS, durations: DURATIONS, maskMs: MASK_MS,
+    distanceCm: parseInt($("distance").value, 10),
+    screen: { w: screen.width, h: screen.height, dpr: devicePixelRatio, viewport: [innerWidth, innerHeight] },
+    exposureDriftMs: { min: Math.min(...drift), max: Math.max(...drift), median: median(drift) },
+    byCondition: byCond, trials: results,
+  }, null, 2);
+  show("done");
+}
+
+$("start").onclick = run;
+$("again").onclick = () => show("intro");
+show("intro");
+</script>
