@@ -216,10 +216,22 @@ open tools/glance_test.html      # then fullscreen it on the second screen
 ```
 
 Sit at the distance you actually sit — size is the variable. About six minutes
-for 28 trials. Press SPACE when a card has landed, then answer two questions;
-the second one is what decides 4b, because a condition can be fast and still
-deliver nothing. Results come out as a table and as JSON to paste into
-`SPEC.md`.
+for 28 trials. Press SPACE when a card has landed, then answer two questions.
+Results come out as a table and as JSON to paste into `SPEC.md`.
+
+Two runs are recorded there. **Read § 4b before trusting the accuracy columns:**
+a timeout leaves the card up for the full ceiling, so those two probes measure
+exposure rather than legibility and are withdrawn. Response rate and reaction
+time are unaffected and are what the conclusions rest on.
+
+```bash
+open tools/wheel_hud.html       # the display both participants preferred
+```
+
+A prototype, not a result: one term per row, wheel or arrow keys or the clicker
+to move, five rows with the focus at full opacity and its neighbours fading
+out, detail on dwell. Sliders along the bottom set the opacity gradient and the
+dwell delay and print the settings as JSON. Nothing here has been measured.
 
 ## Clicker control
 

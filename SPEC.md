@@ -431,6 +431,78 @@ enough to act on. `rsvp`'s identity result is 4/7 and is one or two trials from
 noise — directionally believed, not established. Direction 1 (form, colour and
 position) is untouched by this instrument and neither confirmed nor refuted.
 
+**Run 2, 2026-08-28 — a second participant with no engineering background, who
+took the terms to be invented.** 7 trials per condition, 75 cm, same screen.
+This is the participant run 1 could not be: someone for whom every term really
+is unfamiliar, which is the case gloss exists for.
+
+| condition | responded | median RT | median, censored | identity | content |
+|---|---|---|---|---|---|
+| `one` | 6/7 | 3160 ms | **3230 ms** | 100% | 86% |
+| `rsvp` | 7/7 | 4860 ms | 4860 ms | 86% | 86% |
+| `today` | 1/7 | 5174 ms | 8000 ms | 100% | 100% |
+| `scroll` | **0/7** | — | 8000 ms | 100% | 100% |
+
+Across both participants:
+
+| condition | responded | censored median | ordering |
+|---|---|---|---|
+| `one` | 12/14 | 3011 / 3230 ms | fastest, both |
+| `rsvp` | 13/14 | 5036 / 4860 ms | second, both |
+| `today` | 5/14 | 7999 / 8000 ms | third, both |
+| `scroll` | **0/14** | ≥8000 ms | never completed, both |
+
+**What replicated.** `one` is fastest for both people and the two medians are
+within 7% of each other — 3011 ms and 3230 ms — from two people with completely
+different domain knowledge. `scroll` was completed **zero times out of
+fourteen**. The full ordering is identical across participants. Direction 2 and
+the death of marquee-as-delivery are as established as this instrument can make
+them.
+
+**Retraction 1: "`rsvp` loses the name" does not replicate.** Run 1 measured
+57% identity; run 2 measured 86%, and the naive participant responded on 7 of 7
+with no timeouts. Run 1 labelled that result "one or two trials from noise,
+directional not established", and it was right to. It is withdrawn. RSVP is
+still second-slowest in both runs, which is reason enough not to build it, but
+not for the reason previously given.
+
+**Retraction 2, and it is the important one: the accuracy probes do not measure
+comprehension, because a timeout grants maximum exposure.** On timeout the card
+stays on screen for the full 8-second ceiling, so a trial nobody could finish is
+also the trial with the longest look at the card. The naive participant's
+*highest* scores — 100% identity and 100% content — are on `today` and `scroll`,
+the two conditions she completed 1 of 7 and 0 of 7 times. Accuracy runs
+**inversely** to response rate, which is what a metric does when it is measuring
+exposure rather than legibility.
+
+That withdraws run 1's reading of `scroll` — "identity and content both scored
+86%, so the text was being taken in". It was being taken in over eight seconds.
+The 0-of-14 completion result stands on its own; the inference about
+comprehension does not.
+
+**New finding: the gist probe is answerable from the term alone.** A
+participant who believed the vocabulary was invented still scored 6 of 7 on
+content in the `one` condition, which displays no content. "Leader election"
+implies "one node holds a lease" without the card saying anything. So the probe
+measures inference from the term plus recognition memory — not what the card
+delivered. Recorded in `tools/cards_corpus.js` beside the data it describes.
+
+**What this leaves standing.** `one` is the fastest and among the most
+completable conditions for both participants; `scroll` is unusable; `today`
+times out for 9 of 14 trials. Those rest on response rate and reaction time,
+neither of which is affected by the exposure confound. Everything that rested
+on the accuracy columns is withdrawn.
+
+**Run 3 needs a different instrument, not more trials.** Self-terminated
+exposure is the flaw: it conflates "how long until you had it" with "how long
+you chose to look", and it hands the slowest conditions the longest look. The
+fix is **fixed exposure** — show the card for N ms, remove it, then probe — and
+vary N to find the exposure each condition needs to be answered reliably. That
+measures the actual HUD question ("how long does this have to be on screen"),
+controls exposure so accuracy becomes interpretable, and removes the timeout
+category entirely. Probes also need distractors drawn from material only the
+card could supply.
+
 **What run 2 would fix, if 4b needs firmer ground:** raise the ceiling to ~15s
 so `today` stops being censored at 3 of 7; add unfamiliar terms with
 call-specific distractors so the content probe measures the card rather than the
@@ -444,6 +516,36 @@ summary now reports `—` with a responded count, holds timeouts at the ceiling,
 and excludes conditions with no responses from "fastest". An instrument that
 renders *no data* as *instant* fails in the direction of looking fine, which is
 the direction that gets believed.
+
+**What both participants preferred, unprompted — and why it is not the
+condition that just died.** Shown the four, both picked "the single word, but
+scrollable": one term per row stacked vertically, the column driven by a wheel,
+about five rows visible with the focus at full opacity, its neighbours at ~85%
+and the outer pair at ~45%. The stated appeal was control and discretion — the
+whole surface can be dialled down to a faint column.
+
+`tools/wheel_hud.html` is that, as a prototype. It is deliberately **not** the
+`scroll` condition, and the difference is the entire design: a marquee moves on
+its own and loops, so it has no endpoint and nobody ever finished one — 0 of
+14. A wheel-driven column is **still until you move it, and stops where you
+stop**. Motion is a cue you initiate, which is what Direction 3 asked for in the
+first place.
+
+It also sits on the intersection of what the runs support: one word per row is
+the winning condition, motion is for seeking rather than reading, and the
+opacity gradient is Direction 1 — **which neither run touched, so the gradient
+is an untested idea in a prototype, not a result**. Detail appears under the
+focus on dwell and hides the instant the focus moves, because a detail line
+that survives a move is a line read about the wrong card.
+
+Two things were measured while building it, both about holding position. The
+focused row must sit at one fixed screen height: laid out in flow it drifted
+16px at the ends of the list as rows stopped rendering, and animating
+`font-size` between rows left the centring transform computing against a layout
+still in flight, worth another 12px. Anchoring the column and dropping the size
+transition leaves 5px of sub-pixel rounding. This matters more here than it
+looks — a HUD whose focus row moves reintroduces exactly the "re-find the card"
+cost that the Phase 3 lifecycle was built to delete.
 
 **Where this could go.** Nothing above requires a screen at the far end of a
 desk. The same cards on a transparent display — smart glasses, a monitor overlay

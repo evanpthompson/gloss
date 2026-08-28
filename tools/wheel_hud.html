@@ -1,0 +1,214 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>gloss — wheel HUD prototype</title>
+<script src="cards_corpus.js"></script>
+<!--
+  A prototype of the display Evan and his wife both preferred after run 2 of
+  the glance test, 2026-08-28: one word per row, stacked vertically, driven by
+  a wheel, with the rows either side of the focus fading out.
+
+  It is NOT the `scroll` condition that died 0-for-14 in the glance test, and
+  the difference is the whole design. That one moved on its own and looped, so
+  it never ended and nobody ever finished it. This one is STILL until you move
+  it, and it stops where you stop. Motion is a cue you initiate, not a delivery
+  mode you wait out — which is what SPEC.md § 4b Direction 3 asked for.
+
+  It sits on the intersection of everything the two runs support:
+
+    Direction 2  one word per row — the fastest condition in both runs, ~3.1s
+    Direction 3  motion for arrival and for seeking, never for reading
+    Direction 1  opacity carries position, which is the direction neither run
+                 touched — so treat the gradient as untested, not proven
+
+  Nothing here is measured yet. It is a thing to look at and argue with.
+-->
+<style>
+  :root {
+    --bg: #0f1115; --fg: #e8e8ea; --dim: #6b7280;
+    --recall: #7dd3a0; --jargon: #f0b45f;
+    --stealth: 1;              /* whole-HUD opacity, driven by the slider */
+    --near: 0.85; --far: 0.45; /* the gradient either side of the focus */
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: var(--bg); color: var(--fg); height: 100vh; overflow: hidden;
+    font: 16px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    display: flex; flex-direction: column;
+  }
+
+  #hud { flex: 1; position: relative; opacity: var(--stealth); user-select: none; }
+  /* The column is anchored to the midline and slid, rather than laid out in
+     flow and centred. In flow, hiding the rows past the end of the list
+     changed the column's own height, which moved the focused row on screen by
+     16px at the ends of the list — measured, not theorised. Anchoring makes
+     the focus position independent of how many rows happen to render. */
+  #column {
+    position: absolute; top: 50%; left: 3vw; right: 3vw;
+    display: flex; flex-direction: column; gap: 0.6vh;
+    transition: transform 120ms ease-out; will-change: transform;
+  }
+  #detail-wrap { position: absolute; top: 50%; left: 3vw; right: 3vw; margin-top: 7vh; }
+
+  .row {
+    display: flex; align-items: baseline; gap: 1vw;
+    padding: 0.5vh 0 0.5vh 1.2vw; border-left: 3px solid transparent;
+    /* Opacity and colour cross-fade; SIZE DOES NOT. Two reasons, and the
+       second is the one that bit. § 4b's own rule is motion for arrival and
+       stillness otherwise, and an animated font-size is continuous motion on
+       every row at once. It also reflows for 120ms, so the centring transform
+       below was being computed against a layout still in flight — measured as
+       12px of focus drift at the end of the list, from a fix meant to remove
+       16px of it. */
+    transition: opacity 120ms linear, border-color 120ms linear;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  /* Distance from the focus is the only thing that sets weight. Nothing moves
+     except the column itself, so the eye keeps its place between turns. */
+  .row[data-d="0"] { opacity: 1;          font-size: clamp(22px, 3.4vw, 50px); font-weight: 600; }
+  .row[data-d="1"] { opacity: var(--near); font-size: clamp(16px, 2.1vw, 30px); }
+  .row[data-d="2"] { opacity: var(--far);  font-size: clamp(13px, 1.5vw, 21px); }
+  .row[data-d="3"] { opacity: 0; font-size: clamp(13px, 1.5vw, 21px); pointer-events: none; }
+  .row[data-d="0"][data-kind="jargon"] { border-left-color: var(--jargon); }
+  .row[data-d="0"][data-kind="recall"] { border-left-color: var(--recall); }
+  .row .kindmark { font-size: 0.42em; letter-spacing: 0.14em; text-transform: uppercase; color: var(--dim); }
+
+  /* Progressive disclosure by dwell, which is what Direction 2 asked for:
+     the term is the card, and detail is what happens if the eye stays. */
+  #detail {
+    margin-left: 1.5vw; max-width: 60ch;
+    font-size: clamp(13px, 1.4vw, 21px); color: var(--dim);
+    opacity: 0; transition: opacity 260ms ease-out;
+  }
+  #detail.on { opacity: 1; }
+
+  #controls {
+    display: flex; gap: 1.6vw; align-items: center; flex-wrap: wrap;
+    padding: 1.4vh 3vw; border-top: 1px solid #1c2029; font-size: 12px; color: var(--dim);
+  }
+  #controls label { display: flex; gap: 0.5em; align-items: center; }
+  input[type=range] { width: 9vw; }
+  kbd { background: #1a1d24; border: 1px solid #2a2f3a; border-radius: 4px; padding: 1px 5px; }
+  #settings { margin-left: auto; font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; }
+  #hint { position: fixed; top: 1.4vh; right: 3vw; font-size: 11px; color: #3d434f; }
+</style>
+
+<div id="hud">
+  <div id="column"></div>
+  <div id="detail-wrap"><div id="detail"></div></div>
+</div>
+
+<div id="controls">
+  <label>stealth <input type="range" id="stealth" min="15" max="100" value="100"></label>
+  <label>near <input type="range" id="near" min="20" max="100" value="85"></label>
+  <label>far <input type="range" id="far" min="0" max="90" value="45"></label>
+  <label>wheel <input type="range" id="sens" min="1" max="10" value="4"></label>
+  <label>dwell <input type="range" id="dwell" min="0" max="1500" step="100" value="600"></label>
+  <span id="settings"></span>
+</div>
+<div id="hint">wheel or <kbd>↑</kbd><kbd>↓</kbd> / <kbd>PgUp</kbd><kbd>PgDn</kbd> to move · <kbd>D</kbd> detail now</div>
+
+<script>
+// Terms only. One word per row is the point — the label and detail exist, but
+// only the focused row's detail is ever shown, and only on dwell.
+const CARDS = window.GLOSS_CARDS.map((c, i) => ({ ...c, kind: i % 3 === 0 ? "recall" : "jargon" }));
+const VISIBLE = 2;              // rows either side of the focus that render at all
+
+const column = document.getElementById("column");
+const detail = document.getElementById("detail");
+const settings = document.getElementById("settings");
+
+let focus = Math.floor(CARDS.length / 2);
+let offset = 0;                 // fractional wheel travel between rows
+let dwellTimer = null;
+
+const rows = CARDS.map(card => {
+  const el = document.createElement("div");
+  el.className = "row";
+  el.dataset.kind = card.kind;
+  el.innerHTML = `<span class="term"></span><span class="kindmark"></span>`;
+  el.querySelector(".term").textContent = card.term;
+  el.querySelector(".kindmark").textContent = card.kind === "recall" ? "your notes" : "term";
+  column.appendChild(el);
+  return el;
+});
+
+function paint() {
+  for (let i = 0; i < rows.length; i++) {
+    const d = Math.abs(i - focus);
+    rows[i].dataset.d = String(Math.min(d, VISIBLE + 1));
+    rows[i].style.display = d > VISIBLE ? "none" : "";
+  }
+  centre();
+  // Detail hides the instant the focus moves, and comes back only if the new
+  // focus is held. A detail line that survives a move is a line you read about
+  // the wrong card.
+  detail.classList.remove("on");
+  clearTimeout(dwellTimer);
+  const ms = +document.getElementById("dwell").value;
+  dwellTimer = setTimeout(showDetail, ms);
+  settings.textContent = JSON.stringify(read());
+}
+
+function centre() {
+  // The focused row holds one fixed position on screen, always. Letting the
+  // column stay centred as a block was the first cut, and at either end of the
+  // list the focus slid up or down the screen — so the eye had to re-find the
+  // one row that is supposed to be findable without looking. That is the
+  // failure the Phase 3 card lifecycle was built to remove; reintroducing it
+  // in the HUD would undo the change that made cards readable at all.
+  //
+  // Measured rather than computed: the focused row is larger than its
+  // neighbours, so its height is not knowable from a row count.
+  const row = rows[focus];
+  const shift = -(row.offsetTop + row.offsetHeight / 2);
+  column.style.transform = `translateY(${shift}px)`;
+}
+
+function showDetail() {
+  detail.textContent = CARDS[focus].detail;
+  detail.classList.add("on");
+}
+
+function move(delta) {
+  const next = Math.min(CARDS.length - 1, Math.max(0, focus + delta));
+  if (next === focus) return;
+  focus = next;
+  paint();
+}
+
+addEventListener("wheel", e => {
+  e.preventDefault();
+  // Sensitivity is a divisor on accumulated wheel travel, so a trackpad flick
+  // and a notched mouse wheel can be dialled to the same feel.
+  offset += e.deltaY / (110 - +document.getElementById("sens").value * 10);
+  const steps = Math.trunc(offset);
+  if (steps) { offset -= steps; move(steps); }
+}, { passive: false });
+
+addEventListener("keydown", e => {
+  const keys = { ArrowDown: 1, ArrowUp: -1, PageDown: 1, PageUp: -1, j: 1, k: -1 };
+  if (e.key in keys) { e.preventDefault(); move(keys[e.key]); }
+  if (e.key.toLowerCase() === "d") { e.preventDefault(); showDetail(); }
+});
+
+const read = () => ({
+  stealth: +document.getElementById("stealth").value,
+  near: +document.getElementById("near").value,
+  far: +document.getElementById("far").value,
+  wheel: +document.getElementById("sens").value,
+  dwellMs: +document.getElementById("dwell").value,
+});
+
+for (const id of ["stealth", "near", "far", "sens", "dwell"]) {
+  document.getElementById(id).addEventListener("input", () => {
+    const s = read();
+    document.documentElement.style.setProperty("--stealth", s.stealth / 100);
+    document.documentElement.style.setProperty("--near", s.near / 100);
+    document.documentElement.style.setProperty("--far", s.far / 100);
+    settings.textContent = JSON.stringify(s);
+  });
+}
+
+addEventListener("resize", centre);
+paint();
+</script>
