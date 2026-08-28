@@ -23,6 +23,26 @@
 //
 // `gist` is kept only so glance_test.html still runs against its own history.
 // Do not build anything new on it.
+//
+// --- AND `fact` FAILED THE SAME WAY, run 3, 2026-08-28 ---------------------
+//
+// The rule above is right and the pairs below do not meet it. Arbitrariness was
+// checked against the TERM and not against the DISTRACTOR, so most pairs offer
+// one ordinary value and one that is absurd by an order of magnitude or that
+// contradicts something the field already knows: 40MB vs 400MB per pod, 200ms
+// vs 30s, 500 vs 50,000 rows a second, a canary at five vs twenty-five percent,
+// 43 minutes a month (99.9%) vs four hours, Stripe's 24-hour idempotency key vs
+// 30 days. Domain sense answers those without the card.
+//
+// Measured: the two conditions that display NO detail at all scored 10/11 on
+// those pairs and 1/5 on the pairs where both options were ordinary — and the
+// condition that DOES display the detail scored the same as the ones that do
+// not. SPEC.md § 4b run 3 has the table.
+//
+// So: DO NOT run exposure_test.html for a result until these pairs are
+// rewritten. Both options must be ordinary. The test for a pair is not "could
+// someone guess this" but "would an experienced engineer reject one of these
+// out of hand" — and it has to be applied before the run, not after it.
 
 window.GLOSS_CARDS = [
   { term: "Kestrel", label: "Kestrel is their deploy gate",

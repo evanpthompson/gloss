@@ -237,6 +237,16 @@ term, one about an arbitrary specific only the card could have told you. Fixed
 exposure is what makes the accuracy numbers mean anything; the glance test is
 kept as the record of runs 1–2, not for new work. About five minutes.
 
+**Run 3 has been run (2026-08-28) and its fact column is void** —
+`tools/results/exposure-run3-2026-08-28.json`. The timing held (drift ≤17 ms,
+median 0), but the probe leaks: most `factDistractor` values are absurd by an
+order of magnitude, so the answer is recoverable from domain sense without the
+card. The two conditions that display *no detail at all* scored 91% on those
+pairs and 20% on the pairs where both options were plausible — and the condition
+that *does* display the detail scored the same as the ones that do not. See
+`SPEC.md` § 4b. **The fix is better probe pairs, not more trials**; the corpus
+needs rewriting before a re-run is worth anyone's five minutes.
+
 ```bash
 open tools/wheel_hud.html       # the display both participants preferred
 ```
@@ -253,7 +263,8 @@ dwell delay and print the settings as JSON. Nothing here has been measured.
 | `tools/exposure_test.html` | **run 3, current.** Fixed exposure, masked, arbitrary-fact probe |
 | `tools/glance_test.html` | runs 1–2. Self-terminated; its accuracy columns are withdrawn |
 | `tools/wheel_hud.html` | the prototype the HUD came from. Superseded by `?mode=wheel`; kept because its sliders are how the numbers were found |
-| `tools/cards_corpus.js` | the 32 cards all three share, and what each probe does not measure |
+| `tools/cards_corpus.js` | the 32 cards all three share, and what each probe does not measure. **Its `fact` pairs are known broken — see `SPEC.md` § 4b run 3** |
+| `tools/results/` | raw run JSON, kept for provenance rather than re-typed into prose |
 
 ## HUD mode (`?mode=wheel`)
 
@@ -381,9 +392,11 @@ project's own tests pass.
   click-through, and excluded from screen capture. The page does not change; the
   phase is the shell. `SPEC.md` § Phase 5 has the comparison, why capture
   exclusion is the row that decides it, and the two things to settle first.
-- **Run 3 of the glance test has not been run by a human.**
-  `tools/exposure_test.html` is verified headless only, and § 4b's conclusions
-  about how much text a card can carry rest on it. It gates Phase 5.
+- **Rewrite the 32 `fact`/`factDistractor` pairs in `tools/cards_corpus.js`,
+  then re-run run 3.** Run 3 happened and its detail column is void — the
+  distractors are implausible, so the probe is answerable without the card
+  (`SPEC.md` § 4b). Nothing about how much text a card can carry is settled, and
+  it gates Phase 5.
 - **Tier 2 post-call research export.** Unchanged from the original plan and
   still not started.
 - **Expand / go deeper on a card.** Raised 2026-08-28; **judged not essential to

@@ -626,6 +626,77 @@ it. Out of scope for Phase 4; worth knowing it is the direction of travel,
 because it argues for keeping cards small, positional and form-encoded rather
 than investing in cleverness about reading long text.
 
+**Run 3 — ran 2026-08-28, 75cm, 24 trials. THE FACT COLUMN IS VOID, for the
+third time and for a third distinct reason.** Raw JSON:
+`tools/results/exposure-run3-2026-08-28.json`.
+
+**The instrument's timing is finally sound**, and that is the one clean pass:
+exposure drift min 0 ms, max 17 ms, median 0 — no exposure more than one frame
+late at 60 Hz. Fixed exposure works. Everything below is about the probe, not
+the timer.
+
+**The pre-registered control did not clear.** § 4b's own gate was that `one` and
+`column` display no detail at all, so both must land near 50% on the fact probe.
+They landed at 63% and 75%; combined 11/16 = 69%, one-sided binomial p = 0.105
+against chance. Underpowered, so this is neither a clean pass nor a proven leak
+— and under this project's own rule a check that could not answer is not a pass.
+
+**What killed it is visible without statistics: `today` scored 75% on fact and
+`column` scored 75% on fact.** The condition that displays the detail line and
+the condition that displays nothing but a term scored identically. Whatever the
+participant was answering from, it was not the card.
+
+**The mechanism, found by re-reading the corpus rather than by more trials.**
+Most `factDistractor` values are absurd by an order of magnitude or contradict a
+value the field already knows — `adds 40MB per pod` vs `400MB`, `relayed every
+200 milliseconds` vs `every 30 seconds`, `500 rows a second` vs `50,000`,
+`canary starts at five percent` vs `twenty-five`, `43 minutes a month` (99.9%)
+vs `four hours`, `keys expire after 24 hours` (the Stripe default) vs `30 days`.
+Classifying each pair as *asymmetric* (distractor ≥5× off, or contradicting a
+known default) or *symmetric* (both operationally ordinary) splits the run
+almost perfectly, **and the split does not vary by condition**:
+
+| | asymmetric pair | symmetric pair |
+|---|---|---|
+| `one` (no detail shown) | 5/5 = 100% | 0/3 = 0% |
+| `column` (no detail shown) | 5/6 = 83% | 1/2 = 50% |
+| **controls combined** | **10/11 = 91%** | **1/5 = 20%** |
+| `today` (detail shown) | 6/6 = 100% | 0/2 = 0% |
+
+**The controls sit at 20% on symmetric pairs — which is what a control is
+supposed to look like — and at 91% the moment one option is implausible.** The
+probe is measuring "which of these two numbers sounds like a real engineering
+number", answered from domain sense, with the card contributing nothing.
+
+**This is the `gist` disease one level down.** `gist` was retired after run 2
+because it was answerable by inference from the term's *meaning*.
+`cards_corpus.js` states the replacement rule in as many words — *"the answer
+must be arbitrary… Both options are the same shape and equally plausible"* — and
+then does not meet it. Arbitrariness was checked against the term and not
+against the distractor.
+
+**Honesty about the classification:** asymmetric/symmetric was assigned *after*
+seeing the results, which makes the 91%/20% split a hypothesis rather than a
+finding. It is a strong one — the mechanism is legible by reading the pairs, and
+it predicts the condition-independence that is the run's most damning number —
+but the next run must pre-register the classification, not derive it.
+
+**Identity cannot rank the conditions either: it is at ceiling.** `today` 8/8
+and `column` 8/8, including both 150 ms trials each. `one` scored 6/8, and both
+misses were at 150 ms, on `Consistent hashing` and on `Backfill` — the latter
+being one of the corpus's deliberately confusable near-misses (for
+`Backpressure`). Two trials, one of them a known trap. Not a finding, and
+specifically not evidence that a bare word is harder to lock than a word in a
+column, tempting as that reading is.
+
+**So run 3 settles nothing about 4b, and settles one thing about the
+instrument.** The `one` vs `today` vs `column` question is still open. The
+symmetric-pair subset is a working instrument in miniature — 7 trials, controls
+at chance — so **the fix is better pairs, not more trials.** Rewrite all 32
+`fact`/`factDistractor` pairs so both options are equally plausible, pre-register
+that judgement, and re-run the same 24 trials. Until then nothing in § 4b's
+detail column may be cited, including in the story bank.
+
 **Folded into `display.html` behind `?mode=wheel`, 2026-08-27.** The prototype
 is now a mode of the real display rather than a file beside it. No flag is the
 second screen, unchanged.
