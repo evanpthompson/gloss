@@ -226,12 +226,26 @@ not the end of the call, cards that persist while their topic is live, a local
 glossary as the chain's floor, and an instant preview in front of it. Sessions
 S1–S6 and their measured results are in `PHASE-3-PLAN.md`.
 
-**Phase 4 — HUD mode and a hardware control.** 4a (clicker control) built
-2026-08-25. 4b (HUD mode) specced but not built, with its constraints recorded
-below so they are not rediscovered.
+**Phase 4 — HUD mode and a hardware control. Complete 2026-08-27.** 4a
+(clicker control) built 2026-08-25; 4b (HUD mode) measured 2026-08-27 and then
+built as a mode of `display.html`, behind `?mode=wheel`.
 
-Two related pieces. The first was straightforward and is done; the second is
-not, and is written down rather than started.
+Phase 4 deliberately ends on the screen it started on. The HUD is a **tightened
+proof of concept on the current second screen** — the display it was measured
+on, the display it ships on, and enough to answer whether the form works at all
+before anything is spent on the window it eventually wants. The transparent
+overlay that § 4b argues toward is real work in a different discipline (a native
+window shell, not a page) and is **Phase 5**, below.
+
+**Phase 5 — the overlay window. Not started.** Take the same
+`display.html?mode=wheel` and give it a window that can sit over the call
+instead of beside it: transparent, frameless, above a full-screen call,
+click-through, and excluded from screen capture. Nothing in the page changes;
+the whole phase is the shell around it. Specced in § Phase 5 below, including
+why capture exclusion is the requirement that decides which shell, and the
+prerequisite that run 3 of the glance test be run by a human first — Phase 5 is
+a bet on the HUD form, and that bet should not be placed on an unmeasured
+display.
 
 #### 4a. Hardware control — built 2026-08-25
 
@@ -611,6 +625,193 @@ framing, and it makes the "looking away" problem disappear rather than disguise
 it. Out of scope for Phase 4; worth knowing it is the direction of travel,
 because it argues for keeping cards small, positional and form-encoded rather
 than investing in cleverness about reading long text.
+
+**Folded into `display.html` behind `?mode=wheel`, 2026-08-27.** The prototype
+is now a mode of the real display rather than a file beside it. No flag is the
+second screen, unchanged.
+
+It is one page and one DOM, not two. The wheel HUD is a *rendering* of the
+selection model 4a already had — `selected` is the focused row, `step()` is what
+moves it, and the wheel is one more input that calls it — over the same card
+nodes the Phase 3 lifecycle creates, updates in place, expires and evicts. That
+lifecycle is the expensive, load-bearing part and it is orthogonal to how a card
+is painted; forking it into a second display was the fastest available way to
+lose it. What changes between modes is CSS, a distance attribute, and where the
+detail line lives.
+
+**The prototype's sliders did not come with it.** They existed to find the
+numbers. The numbers now arrive as query params (`stealth`, `near`, `far`,
+`dwell`, `wheel`), so a value can still be tried without a rebuild, but the HUD
+does not ship a control panel it should never show. A parameter that will not
+parse falls back to its default rather than to `NaN` — a HUD rendered invisible
+because `?far=abc` became nothing is precisely the fail-open this display
+exists not to have.
+
+**Three decisions the fold forced, none of them measured.** They are choices
+about a display no run has scored, and they are recorded here so they are
+argued with rather than inherited:
+
+1. **A new card takes the focus.** The HUD renders exactly one row legibly. A
+   focus that stays where it was would leave the card for the question just
+   asked as the dim one, and every turn would open with a wheel — which makes
+   the HUD strictly worse than the second screen it replaces, where all three
+   cards are readable at once. The wheel takes the focus straight back. The
+   alternative (arrival is visible at `d=1` and never steals) is the more
+   faithful reading of Direction 3, and is one line to switch to.
+2. **The kind mark shrinks to one word** on the HUD — `term`, `yours` — because
+   "UNFAMILIAR TERM" beside a one-word term is more text than the term, which is
+   Direction 2 pointed backwards. Kind is carried by the border colour instead.
+3. **An error row is exempt from the gradient and from the cull.** Colour is the
+   first thing `--stealth` takes away, and a row hidden for being far from the
+   focus looks exactly like a row that is not there. "Down" and "scrolled out of
+   view" must not be the same picture, so an error row is never dimmed, never
+   hidden by distance, and keeps its words. The status dot is likewise exempt
+   from `--stealth`: a HUD you cannot see is a choice, a HUD that hides that it
+   is disconnected is a fault.
+
+**Nine browser tests cover the mode**, including the two properties that were
+measured rather than reasoned about — the focused row holds one screen height
+across a walk that wraps both ends of the list (tolerance 6px, against 5px of
+known sub-pixel residual), and nothing but the column moves. One of the nine
+guards the other direction: the second screen must still start with nothing
+selected and no distance styling, because the cost of a mode flag is the mode
+that was already working.
+
+**What the fold did not deliver, and cannot.** Not the transparent overlay
+above. A web page cannot make its own window transparent: `background:
+transparent` in a tab is composited against the browser's own opaque base, and
+there is no web API for window transparency, always-on-top or click-through.
+`--stealth` fades content against a solid background. On a second screen that is
+the intended effect; over a video call it would be a grey rectangle.
+
+**That is a window problem, not a page problem, and it is the whole of Phase 5.**
+The page is the part that survives the change — every candidate shell renders
+this same file unchanged — so Phase 4 stops here on purpose, as a tightened
+proof of concept on the screen the HUD was measured on. § Phase 5 below carries
+the shell comparison and the requirement that decides it.
+
+#### Phase 5. The overlay window — not started
+
+The HUD's own argument ends at a display that sits *in* the visual field rather
+than beside it. Phase 4 deliberately did not go there, and Phase 5 is that work
+written down rather than started.
+
+**Scope: the window only.** `display.html?mode=wheel` is the content and does
+not change. Everything here is the shell around it, which is why the phase can
+wait without holding anything else up, and why nothing built in Phase 4 is
+wasted if the shell choice turns out wrong.
+
+**What the shell has to provide:**
+
+| | Electron | Tauri v2 | pywebview |
+|---|---|---|---|
+| transparent, frameless | yes | yes, needs `macos-private-api` | yes (Cocoa) |
+| above a full-screen call | `setAlwaysOnTop(…, 'screen-saver')`, `setVisibleOnAllWorkspaces` | yes | `on_top=True` |
+| click-through | `setIgnoreMouseEvents(true, {forward: true})` | `set_ignore_cursor_events` | **no** |
+| excluded from screen capture | `setContentProtection(true)` | `set_content_protected(true)` | **no** |
+| cost | ~150MB, Node in a Python repo | ~10MB, a Rust toolchain | `uv add pywebview` |
+
+**Capture exclusion is the row that decides it, not transparency.** An overlay
+without it puts the prep pack into the screen share, which inverts the tool
+rather than degrading it — the failure is silent, it looks fine from this side,
+and it is discovered by the other party. Under this project's own rule that is a
+refusal to ship, not a caveat. It maps to `NSWindow.sharingType = .none` on
+macOS. pywebview is otherwise the natural fit for a Python repo and loses on
+exactly the two rows that matter, which is worth stating plainly because it is
+the one that would otherwise be reached for first.
+
+**Electron is the recommendation for the spike**, on the grounds that all four
+rows are documented one-liners and it also closes § 4a's open hole:
+`globalShortcut` gives the clicker a listener that works while the video call
+holds focus. One honest caveat, because it is the kind that gets discovered
+late: presenters send bare `PageUp`/`PageDown`, and registering those globally
+would break every slide deck on the machine. 4a still needs a modifier combo or
+a real HID listener; the shell does not make that free.
+
+**A tension to resolve inside the spike, not before it:** click-through and "the
+wheel moves my column" are opposites. The standard resolution is
+`forward: true` — the window stays click-through, still receives mouse-move, and
+flips interactive while the pointer is over the column.
+
+**Prerequisites, in order:**
+
+1. **Run 3 of the glance test, by a human.** Phase 5 is a bet on the HUD form.
+   `tools/exposure_test.html` is verified headless only, and § 4b's reading of
+   how much text a card can carry has no human run behind it yet.
+2. **A decision on whether a new card takes the focus** (§ 4b, decision 1). On a
+   second screen a wrong answer costs a wheel flick. On an overlay held in the
+   visual field for a whole call it is the difference between a tool and a
+   distraction, and it is one line either way.
+
+**What would prove it, not just demo it.** The gate is not "the window is
+see-through". It is: start a real screen share, confirm the overlay is absent
+from the capture, and confirm a click at the overlay's coordinates reaches the
+application underneath. A capture exclusion that is believed to work and does
+not is worse than no overlay, because it gets budgeted against.
+
+#### Card interaction — the backlog, and what is already built
+
+Raised 2026-08-28: cards should tile so a new one arrives alongside a few
+existing ones and old topics fade off as they are displaced; a key should pin a
+card; and a different interaction should take a topic deeper. Written down here
+rather than started, with an honest note on which of it is new — because most of
+it is not, and a backlog that re-proposes shipped behaviour hides the one item
+that is real work.
+
+**Already built — MVP, and it is the MVP.**
+
+| asked for | where it lives |
+|---|---|
+| tile, N visible, older topics fade off | cards mode, `GLOSS_MAX_CARDS` (default 3) |
+| replaced rather than cleared | eviction by *least-recently-mentioned*, not oldest-created: a topic the conversation returns to outlives a one-off from earlier |
+| fade rather than snap | 220 ms opacity transition on removal; 90 s TTL per card (`GLOSS_CARD_TTL_S`) |
+| pin a card | `Enter` / `p` on the clicker — ignores its TTL and every refresh of it |
+| dismiss a card | `Backspace` / `Delete` / `x` |
+
+Covered by `tests/test_eviction.py` and `tests/test_display.py`. Nothing to do.
+
+**What the request actually surfaces, which is worth more than the features.**
+The tiling described — *a new card visible alongside several existing ones* — is
+something the second screen does better than the wheel HUD, which makes exactly
+one row legible and fades the rest. That is evidence against § 4b decision 1
+("a new card takes the focus"), and possibly against the wheel's premise for a
+call with several live topics. It is not evidence to act on yet: run 3 is the
+thing that would settle it, and it has not been run. Recorded so the HUD's
+default is revisited on data rather than defended on having been built.
+
+**Not built, and the only new work here: expand / go deeper on a card.**
+
+Verdict: **not essential to MVP.** Four reasons, in the order they bite.
+
+1. **The clicker has no free button.** A four-button presenter sends
+   `PageUp`/`PageDown` and usually one blank key; next, previous, pin, dismiss
+   and blank already claim everything it emits. An expand action needs a key
+   that no presenter sends, a long-press, or a reach for the keyboard — and
+   reaching for a keyboard mid-call is the disruption § 4a exists to remove.
+2. **A mid-call vendor round trip is a new failure mode on the interactive
+   path.** Everything on that path today is either cached, local, or fails into
+   a card that says so. "Press expand, wait, nothing happens" is a worse moment
+   than not having the button.
+3. **It has a recurring cost per press**, on a project whose standing
+   constraint is no paid services.
+4. **Tier 2 already covers "go deeper" where it is free to be slow.** The
+   deferred post-call export (§ Phasing, Phase 3 deferred) does a research pass
+   over the saved transcript with grounded citations, with no in-call latency
+   and no risk to the call.
+
+**The version that would be worth building, if it is built: local-only
+expansion.** Both card kinds already have a local source — `recall` cards come
+from a section of the prep pack, `jargon` cards can be backed by the book-built
+glossary — and both indexes only ever quote. So *expand* could mean **show more
+of the source this card came from**, not *ask a model for more*. Zero vendor
+call, zero added cost, no new failure mode, and it degrades correctly: a card
+with no local source simply has nothing to expand, which is a silent no-op
+rather than a spinner. That is the shape to spec if this is picked up; the
+model-backed version is not.
+
+**Sequencing.** After run 3 and after § 4b decision 1 is settled, because both
+change what an expand action would even be attached to. Not before Phase 5, and
+not a Phase 5 blocker.
 
 ### Phase 2 design
 

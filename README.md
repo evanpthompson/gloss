@@ -11,8 +11,10 @@ audio pipe, turn-end enrichment with cards on a second screen, prompt caching,
 a three-link provider chain whose floor is two local indexes — your prep pack
 for `recall`, a book-built glossary for `jargon` — cards that persist while
 their topic is live, and a presenter clicker to drive them. Both vendors can be
-out and the call still gets cards. Phase 4b (HUD mode) is specced and not
-built. 217 tests gate all of it in CI.
+out and the call still gets cards. Phase 4 is complete: the HUD ships behind
+`?mode=wheel` as a tightened proof of concept on the second screen it was
+measured on. The transparent overlay it argues toward is a window problem rather
+than a page one and is Phase 5, not started. 226 tests gate all of it in CI.
 
 `SPEC.md` carries the design and every measurement behind it, including the
 things deliberately **not** built and the data that justified not building them.
@@ -141,6 +143,7 @@ GLOSS_SESSION=sessions/my-call uv run b_server.py
 
 ```
 open display.html
+open "display.html?mode=wheel"   # the same cards as a HUD — see below
 ```
 
 It reconnects on its own, so restarting the server mid-session is fine.
@@ -249,8 +252,71 @@ dwell delay and print the settings as JSON. Nothing here has been measured.
 |---|---|
 | `tools/exposure_test.html` | **run 3, current.** Fixed exposure, masked, arbitrary-fact probe |
 | `tools/glance_test.html` | runs 1–2. Self-terminated; its accuracy columns are withdrawn |
-| `tools/wheel_hud.html` | prototype of the preferred display. Not measured |
+| `tools/wheel_hud.html` | the prototype the HUD came from. Superseded by `?mode=wheel`; kept because its sliders are how the numbers were found |
 | `tools/cards_corpus.js` | the 32 cards all three share, and what each probe does not measure |
+
+## HUD mode (`?mode=wheel`)
+
+The display both run-2 participants preferred, folded into `display.html`
+behind a flag. Same file, same WebSocket, same cards — the second screen is
+still what you get with no flag, and nothing about it changed.
+
+```bash
+open "display.html?mode=wheel"
+open "display.html?mode=wheel&stealth=40&near=90&far=25&dwell=900&wheel=6"
+```
+
+One term per row, stacked, with the focus row at full size and its neighbours
+fading out. Wheel, arrow keys, PageUp/PageDown or the clicker move the focus.
+Detail for the focused row appears after a dwell, and leaves the instant the
+focus moves — a detail line that survives a move is a line read about the wrong
+card.
+
+| param | default | what it does |
+|---|---|---|
+| `stealth` | `100` | opacity of the whole HUD, 15–100. The status dot is exempt |
+| `near` | `85` | opacity of the rows either side of the focus |
+| `far` | `45` | opacity of the rows two out |
+| `dwell` | `600` | ms of stillness before the detail line appears; `0` for instant |
+| `wheel` | `4` | wheel sensitivity, 1–10 |
+
+A bad value falls back to its default rather than to `NaN`. A HUD rendered
+invisible because `?far=abc` quietly became nothing is exactly the silent
+failure this display exists not to have.
+
+**It is not the `scroll` condition that finished 0-of-14 in the glance test.**
+That one moved on its own and looped, so it never ended and nobody ever
+finished it. This one is still until you move it and stops where you stop.
+
+**What is decided but not measured**, so it is the first thing to argue with:
+
+- **A new card takes the focus.** The HUD renders exactly one row legibly, so a
+  focus that lags the conversation would make it worse than the screen it
+  replaces — the card for the question just asked would be the dim one. The
+  wheel takes the focus straight back.
+- **The opacity gradient** is Direction 1, which no run has touched.
+- **The kind mark shrinks to one word** (`term` / `yours`); the border colour is
+  what carries kind on the HUD. An error card is exempt from that and from the
+  fading and the culling, because "down" and "scrolled out of view" must never
+  look the same.
+
+### It is not a transparent overlay, and a browser cannot make it one
+
+`SPEC.md` § 4b names a transparent overlay as the direction of travel. A web
+page cannot get there on its own: `background: transparent` in a tab is
+composited against the browser's own opaque base, and there is no web API for
+window transparency, always-on-top, or click-through. `stealth` fades the
+*content* against a solid background, which is the right effect on a second
+screen and would be a grey rectangle over a video call.
+
+That is a **window** problem, not a page problem, and the page is the part that
+survives it — Electron, Tauri and pywebview all render this same file unchanged.
+So Phase 4 stops here on purpose, on the screen the HUD was measured on. The
+overlay is **Phase 5**: transparent and frameless, above a full-screen call,
+click-through, and **excluded from screen capture** — without that last one,
+sharing your screen puts your prep notes in the capture, which inverts the tool
+rather than degrading it. `SPEC.md` § Phase 5 carries the shell comparison, the
+two prerequisites, and what would prove it rather than demo it. Not started.
 
 ## Clicker control
 
@@ -301,7 +367,7 @@ pass.
 | `test_kb.py` | unit | the local glossary — mostly what it refuses to answer |
 | `test_recall.py` | unit | the prep-pack index — mostly what it refuses to answer |
 | `test_eviction.py` | unit | the transcript ceiling, and what crossing it costs |
-| `test_display.py` | browser | card lifecycle in `display.html`, in real Chromium |
+| `test_display.py` | browser | card lifecycle and HUD mode in `display.html`, in real Chromium |
 
 The end-to-end audio pipe test lives in the separate `gloss-e2e` project; it
 needs two containers and a mocked Deepgram, and CI triggers it after this
@@ -309,12 +375,25 @@ project's own tests pass.
 
 ## Next (not built)
 
-- **Phase 4b — HUD mode.** Cards as a heads-up surface rather than a second
-  screen: meaning carried by form and position before any word is read, and
-  ultimately a transparent overlay. Specced in `SPEC.md` § 4b, with the reading
-  research that constrains it and a test to run before writing any code.
+- **Phase 5 — the overlay window.** The HUD ships on the second screen
+  (`?mode=wheel`, above); what is left is a window that can sit over the call
+  instead of beside it — transparent, frameless, above a full-screen call,
+  click-through, and excluded from screen capture. The page does not change; the
+  phase is the shell. `SPEC.md` § Phase 5 has the comparison, why capture
+  exclusion is the row that decides it, and the two things to settle first.
+- **Run 3 of the glance test has not been run by a human.**
+  `tools/exposure_test.html` is verified headless only, and § 4b's conclusions
+  about how much text a card can carry rest on it. It gates Phase 5.
 - **Tier 2 post-call research export.** Unchanged from the original plan and
   still not started.
+- **Expand / go deeper on a card.** Raised 2026-08-28; **judged not essential to
+  the MVP** and specced in `SPEC.md` § Card interaction with the reasoning — the
+  clicker has no free button, a mid-call vendor round trip is a new failure mode
+  on the interactive path, and Tier 2 already covers depth where it is free to
+  be slow. If it is built, the shape to build is *local-only expansion* (show
+  more of the prep-pack section or glossary entry the card came from), not a
+  second model call. Tiling and pinning, raised alongside it, are already built
+  — see the same section.
 - **Physical verification.** Clicker keycodes, two-laptop capture, real
   end-to-end latency — `SPEC.md` § "Cannot be verified without hardware".
 

@@ -551,3 +551,154 @@ def test_the_cap_is_absolute_even_when_everything_is_pinned(page: Display) -> No
     page.settle()
     assert len(page.labels) == 3
     assert "Service mesh" in page.labels
+
+
+# --- HUD mode (Phase 4b, ?mode=wheel) ---------------------------------------
+#
+# The HUD is not a second display. It is the same card nodes, the same
+# lifecycle and the same selection model, painted as a wheel — so what these
+# tests guard is that the fold did not fork any of that, plus the two things
+# the prototype measured rather than reasoned about: the focus row holds one
+# screen height, and nothing but the column moves.
+
+
+class Hud(Display):
+    """Same wrapper, pointed at the same file with the mode flag on."""
+
+    def d(self, label: str) -> str | None:
+        return self.page.evaluate(
+            "(want) => [...document.querySelectorAll('.card')]"
+            ".find(e => e.querySelector('.label').textContent === want)?.dataset.d",
+            label,
+        )
+
+    def hidden(self, label: str) -> bool:
+        return self.page.evaluate(
+            "(want) => [...document.querySelectorAll('.card')]"
+            ".find(e => e.querySelector('.label').textContent === want)"
+            "?.style.display === 'none'",
+            label,
+        )
+
+    def opacity(self, label: str) -> float:
+        return float(self.page.evaluate(
+            "(want) => getComputedStyle([...document.querySelectorAll('.card')]"
+            ".find(e => e.querySelector('.label').textContent === want)).opacity",
+            label,
+        ))
+
+    @property
+    def detail_shown(self) -> str | None:
+        el = self.page.locator("#hud-detail")
+        return el.text_content() if "on" in (el.get_attribute("class") or "") else None
+
+    @property
+    def focus_centre_y(self) -> float:
+        box = self.page.locator(".card.sel").bounding_box()
+        return box["y"] + box["height"] / 2
+
+    def wheel(self, delta: float) -> None:
+        self.page.mouse.move(640, 400)   # the wheel lands where the pointer is
+        self.page.mouse.wheel(0, delta)
+        self.page.wait_for_timeout(60)
+
+
+@pytest.fixture
+def hud(browser):
+    ctx = browser.new_context(viewport={"width": 1280, "height": 800})
+    p = ctx.new_page()
+    p.goto(DISPLAY.as_uri() + "?mode=wheel&dwell=200")
+    yield Hud(p)
+    ctx.close()
+
+
+def test_the_hud_always_has_a_focus(hud: Hud) -> None:
+    """On the second screen no selection is the normal state. On the HUD it
+    would mean no row is at full size — the row the eye is meant to land on
+    without looking would not exist."""
+    three(hud)
+    assert hud.selected == "A2DP", "the newest card should take the focus"
+
+
+def test_the_second_screen_still_starts_with_nothing_selected(page: Display) -> None:
+    """The guard on the fold: adding a mode must not change the mode that ships."""
+    three(page)
+    assert page.selected is None
+    assert page.page.evaluate("() => document.getElementById('cards').style.transform") == ""
+    assert page.page.evaluate(
+        "() => [...document.querySelectorAll('.card')].every(e => e.dataset.d === undefined)"
+    ), "distance styling leaked into the second screen"
+
+
+def test_distance_from_the_focus_is_the_only_thing_that_sets_weight(hud: Hud) -> None:
+    three(hud)                       # focus lands on A2DP, the last row
+    assert (hud.d("A2DP"), hud.d("BM25"), hud.d("Kestrel")) == ("0", "1", "2")
+
+    hud.key("ArrowLeft")             # step back one
+    assert (hud.d("A2DP"), hud.d("BM25"), hud.d("Kestrel")) == ("1", "0", "1")
+
+
+def test_the_focused_row_holds_one_fixed_screen_height(hud: Hud) -> None:
+    """The measured property, and the reason the column is anchored rather than
+    laid out in flow: in flow the focus drifted 16px at the ends of the list,
+    and animating font-size added 12px more. 5px of sub-pixel rounding is what
+    is left, so the tolerance is deliberately tight."""
+    three(hud)
+    hud.wait(200)
+    first = hud.focus_centre_y
+
+    for _ in range(4):               # walk the list, wrapping past both ends
+        hud.key("ArrowLeft")
+        hud.wait(200)
+        assert abs(hud.focus_centre_y - first) <= 6, "the focus row moved under the reader"
+
+
+def test_detail_waits_for_dwell_and_leaves_the_instant_the_focus_moves(hud: Hud) -> None:
+    """Progressive disclosure by dwell — § 4b Direction 2. A detail line that
+    survives a move is a line read about the wrong card."""
+    hud.turn(card("kestrel", "Kestrel", "Deploy gate."), card("bm25", "BM25", "Ranking."))
+    assert hud.detail_shown is None, "detail was shown before the dwell elapsed"
+
+    hud.wait(300)                    # fixture sets dwell=200ms
+    assert hud.detail_shown == "Ranking."
+
+    hud.key("ArrowLeft")
+    assert hud.detail_shown is None, "detail survived a move"
+
+    hud.wait(300)
+    assert hud.detail_shown == "Deploy gate."
+
+
+def test_d_shows_the_detail_without_waiting(hud: Hud) -> None:
+    hud.turn(card("kestrel", "Kestrel", "Deploy gate."))
+    hud.key("d")
+    assert hud.detail_shown == "Deploy gate."
+
+
+def test_the_wheel_moves_the_focus(hud: Hud) -> None:
+    """The wheel is one more input into the selection model 4a already has, not
+    a second way to move. How far one notch travels is a sensitivity setting and
+    is not asserted here; that it moves at all is the wiring under test."""
+    three(hud)
+    hud.wheel(140)
+    assert hud.selected in ("Kestrel", "BM25"), "the wheel did not move the focus"
+
+
+def test_an_expiring_focus_hands_the_focus_on(hud: Hud) -> None:
+    """A TTL can take the focused row out from under the reader. The HUD has to
+    land somewhere; leaving no focus is the one outcome it cannot have."""
+    hud.turn(card("kestrel", "Kestrel"), card("bm25", "BM25", ttl=0.3))
+    assert hud.selected == "BM25"
+    hud.wait(700)
+    assert hud.selected == "Kestrel"
+
+
+def test_an_error_row_is_never_dimmed_or_hidden_by_distance(hud: Hud) -> None:
+    """Fail loud. "Down" and "scrolled out of view" must not look the same, so
+    the error row is exempt from both the opacity gradient and the cull."""
+    hud.turn(card("err", "not working", kind="error"))
+    three(hud)                                  # pushes the error three rows away
+
+    assert hud.d("not working") == "3", "the error should be outside the visible band"
+    assert not hud.hidden("not working"), "an error card was culled by distance"
+    assert hud.opacity("not working") == 1.0, "an error card was dimmed by distance"

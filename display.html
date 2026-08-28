@@ -5,6 +5,9 @@
   :root {
     --bg: #0f1115; --fg: #e8e8ea; --dim: #6b7280;
     --recall: #7dd3a0; --jargon: #f0b45f; --error: #ef4444;
+    /* HUD mode only. Defaults are the prototype's; ?near= &far= &stealth=
+       override them, so a value can be tried without a rebuild. */
+    --stealth: 1; --near: 0.85; --far: 0.45;
   }
   * { box-sizing: border-box; margin: 0; }
   body {
@@ -48,9 +51,76 @@
   #status { font-size: 12px; color: var(--dim); display: flex; gap: 0.6em; align-items: center; }
   #dot { width: 8px; height: 8px; border-radius: 50%; background: #ef4444; }
   #dot.up { background: var(--recall); }
+
+  /* --- HUD mode (Phase 4b, ?mode=wheel) ----------------------------------
+     The same card nodes, drawn as a wheel. Not a second display and not a
+     second DOM: everything Phase 3 fixed about card identity and lifecycle is
+     orthogonal to how a card is painted, and duplicating the list was the
+     fastest way to lose it. */
+  #detail-wrap { display: none; }
+  body[data-mode="wheel"] { position: relative; padding: 0; overflow: hidden; }
+  /* Anchored to the midline and slid, rather than laid out in flow and
+     centred. In flow, hiding the rows past the end of the list changed the
+     column's own height, which moved the focused row 16px on screen at the
+     ends of the list — measured, not theorised. */
+  body[data-mode="wheel"] #cards {
+    position: absolute; top: 50%; left: 3vw; right: 3vw;
+    flex: none; gap: 0.6vh; justify-content: flex-start;
+    opacity: var(--stealth);
+    transition: transform 120ms ease-out; will-change: transform;
+  }
+  body[data-mode="wheel"] .card {
+    display: flex; align-items: baseline; gap: 1vw;
+    border-left-width: 3px; border-left-color: transparent;
+    padding: 0.5vh 0 0.5vh 1.2vw; animation: none;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    /* Opacity and colour cross-fade; SIZE DOES NOT. An animated font-size is
+       continuous motion on every row at once, and it reflows for 120ms, so the
+       centring transform above computes against a layout still in flight —
+       measured as 12px of focus drift from a fix meant to remove 16px of it. */
+    transition: opacity 120ms linear, border-color 120ms linear;
+  }
+  /* Distance from the focus is the only thing that sets weight, and the focus
+     row is the only one that carries kind colour. */
+  body[data-mode="wheel"] .card[data-d="0"] {
+    opacity: 1; font-size: clamp(22px, 3.4vw, 50px); font-weight: 600;
+    border-left-color: var(--kind);
+  }
+  body[data-mode="wheel"] .card[data-d="1"] { opacity: var(--near); font-size: clamp(16px, 2.1vw, 30px); }
+  body[data-mode="wheel"] .card[data-d="2"] { opacity: var(--far);  font-size: clamp(13px, 1.5vw, 21px); }
+  body[data-mode="wheel"] .card[data-d="3"] { opacity: 0; font-size: clamp(13px, 1.5vw, 21px); pointer-events: none; }
+  /* An error card is the server saying it is broken. "Down" and "scrolled out
+     of view" must never look the same, so it is never dimmed by distance and
+     `paint` never hides it. */
+  body[data-mode="wheel"] .card[data-kind="error"] { opacity: 1; border-left-color: var(--error); }
+  body[data-mode="wheel"] .card.out { opacity: 0; }
+  /* Size and colour already carry the focus; thickening the border as well
+     would shift the row's text 7px sideways on every move. */
+  body[data-mode="wheel"] .card.sel { border-left-width: 3px; }
+  body[data-mode="wheel"] .card .label { order: 1; font-size: inherit; font-weight: inherit; }
+  body[data-mode="wheel"] .card .tag {
+    order: 2; margin: 0; font-size: 0.42em; color: var(--dim);
+  }
+  body[data-mode="wheel"] .card .detail { display: none; }
+  /* Progressive disclosure by dwell — Direction 2. Detail lives outside the
+     column so revealing it moves no row. */
+  body[data-mode="wheel"] #detail-wrap {
+    display: block; position: absolute; top: 50%; left: 3vw; right: 3vw;
+    margin-top: 7vh; opacity: var(--stealth); pointer-events: none;
+  }
+  #hud-detail {
+    margin-left: 1.5vw; max-width: 60ch;
+    font-size: clamp(13px, 1.4vw, 21px); color: var(--dim);
+    opacity: 0; transition: opacity 260ms ease-out;
+  }
+  #hud-detail.on { opacity: 1; }
+  /* Not dimmed by --stealth. A HUD you cannot see is a choice; a HUD that
+     hides that it is disconnected is a fault. */
+  body[data-mode="wheel"] #status { position: fixed; bottom: 1.4vh; left: 3vw; }
 </style>
 
 <div id="cards"><div id="idle">listening</div></div>
+<div id="detail-wrap"><div id="hud-detail"></div></div>
 <div id="status"><span id="dot"></span><span id="state">connecting</span></div>
 
 <script>
@@ -59,7 +129,34 @@
   const state = document.getElementById("state");
   const url = (location.search.match(/[?&]ws=([^&]+)/) || [])[1] || "ws://localhost:8765/display";
 
+  // Phase 4b. Default is the second screen that ships today; ?mode=wheel is
+  // the HUD. One page, because the card lifecycle is the expensive part and it
+  // is identical either way.
+  const params = new URLSearchParams(location.search);
+  const WHEEL = params.get("mode") === "wheel";
+  // A bad value falls back to the default rather than to NaN. A HUD rendered
+  // invisible because ?far=abc quietly became NaN is exactly the silent
+  // failure this display exists to not have.
+  const num = (name, dflt, lo, hi) => {
+    if (!params.has(name)) return dflt;
+    const v = Number(params.get(name));
+    return Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : dflt;
+  };
+  const TUNE = {
+    stealth: num("stealth", 100, 15, 100) / 100,
+    near: num("near", 85, 0, 100) / 100,
+    far: num("far", 45, 0, 100) / 100,
+    sens: num("wheel", 4, 1, 10),
+    dwell: num("dwell", 600, 0, 5000),
+  };
+
   const TAGS = { recall: "your notes", jargon: "unfamiliar term", error: "not working" };
+  // On the HUD the border colour already carries kind, and § 4b Direction 2 is
+  // "one word beats six" — "UNFAMILIAR TERM" beside a one-word term is more
+  // text than the term itself. The mark shrinks rather than disappearing:
+  // colour is the first thing --stealth takes away, and an error must still
+  // say so in words when it has been dimmed to nearly nothing.
+  const HUD_TAGS = { recall: "yours", jargon: "term", error: "not working" };
 
   // One entry per visible card, keyed by the topic id the server assigns.
   //
@@ -90,9 +187,16 @@
 
   const order = () => [...live.keys()];
 
-  function select(id) {
+  // Split so `paint` can re-home a lost focus without calling back into
+  // `select`, which calls `paint`.
+  function mark(id) {
     for (const [key, entry] of live) entry.el.classList.toggle("sel", key === id);
     selected = live.has(id) ? id : null;
+  }
+
+  function select(id) {
+    mark(id);
+    paint();
   }
 
   function step(delta) {
@@ -143,6 +247,93 @@
     act();
   });
 
+  // --- HUD mode (Phase 4b) -----------------------------------------------
+  //
+  // The wheel HUD is a *rendering* of the selection model 4a already has:
+  // `selected` is the focused row, `step()` is what moves it, and the wheel is
+  // one more input that calls it. Cards still arrive, update in place, expire
+  // and evict exactly as they do on the second screen.
+  //
+  // It is not the `scroll` condition that finished 0-of-14 in the glance test.
+  // That one moved on its own and looped, so it never ended and nobody ever
+  // finished it. This is still until you move it, and it stops where you stop:
+  // motion as a cue you initiate, which is what § 4b Direction 3 asked for.
+  //
+  // The prototype's sliders are gone. They existed to find the numbers; the
+  // numbers now arrive as query params, and a HUD does not ship a control
+  // panel it should never show.
+  const hudDetail = document.getElementById("hud-detail");
+  const VISIBLE = 2;        // rows either side of the focus that render at all
+  let dwellTimer = null;
+
+  function paint() {
+    if (!WHEEL) return;
+    const ids = order();
+    // The HUD always has a focus. On the second screen no selection is the
+    // normal state; here it would mean no row is at full size and the row the
+    // eye is meant to land on without looking does not exist.
+    if (!live.has(selected) && ids.length) mark(ids[ids.length - 1]);
+    const at = ids.indexOf(selected);
+    ids.forEach((id, i) => {
+      const entry = live.get(id);
+      const d = at === -1 ? VISIBLE + 1 : Math.abs(i - at);
+      entry.el.dataset.d = String(Math.min(d, VISIBLE + 1));
+      entry.el.style.display = d > VISIBLE && entry.kind !== "error" ? "none" : "";
+    });
+    centre();
+    // Detail hides the instant the focus moves, and comes back only if the new
+    // focus is held. A detail line that survives a move is a line read about
+    // the wrong card.
+    hudDetail.classList.remove("on");
+    clearTimeout(dwellTimer);
+    if (selected) dwellTimer = setTimeout(showDetail, TUNE.dwell);
+  }
+
+  function centre() {
+    // The focused row holds one fixed screen height, always. Measured rather
+    // than computed: the focused row is larger than its neighbours, so its
+    // height is not knowable from a row count. A HUD whose focus row moves
+    // reintroduces the "re-find the card" cost the Phase 3 lifecycle deleted.
+    const entry = live.get(selected);
+    if (!entry) { cards.style.transform = ""; return; }
+    cards.style.transform =
+      `translateY(${-(entry.el.offsetTop + entry.el.offsetHeight / 2)}px)`;
+  }
+
+  function showDetail() {
+    const entry = live.get(selected);
+    if (!entry) return;
+    hudDetail.textContent = entry.el.querySelector(".detail").textContent;
+    hudDetail.classList.add("on");
+  }
+
+  if (WHEEL) {
+    document.body.dataset.mode = "wheel";
+    const root = document.documentElement.style;
+    root.setProperty("--stealth", TUNE.stealth);
+    root.setProperty("--near", TUNE.near);
+    root.setProperty("--far", TUNE.far);
+
+    let travel = 0;   // fractional wheel travel between rows
+    addEventListener("wheel", (e) => {
+      e.preventDefault();
+      // Sensitivity is a divisor on accumulated travel, so a trackpad flick
+      // and a notched mouse wheel can be dialled to the same feel.
+      travel += e.deltaY / (110 - TUNE.sens * 10);
+      const steps = Math.trunc(travel);
+      if (steps) { travel -= steps; step(steps); }
+    }, { passive: false });
+
+    // Detail now, for when the dwell is longer than the patience.
+    addEventListener("keydown", (e) => {
+      if (e.key.toLowerCase() !== "d") return;
+      e.preventDefault();
+      showDetail();
+    });
+
+    addEventListener("resize", centre);
+  }
+
   const showIdle = () => {
     if (live.size === 0 && !document.getElementById("idle"))
       cards.innerHTML = '<div id="idle">listening</div>';
@@ -158,11 +349,12 @@
     entry.el.classList.add("out");         // topic returning mid-fade gets a
     setTimeout(() => entry.el.remove(), 220);  // fresh element, not this one
     setTimeout(showIdle, 220);
+    paint();   // an expiring focus hands the focus on rather than losing it
   }
 
   function fill(el, c) {
     el.dataset.kind = c.kind;
-    el.querySelector(".tag").textContent = TAGS[c.kind] || c.kind;
+    el.querySelector(".tag").textContent = (WHEEL ? HUD_TAGS : TAGS)[c.kind] || c.kind;
     el.querySelector(".label").textContent = c.label;
     el.querySelector(".detail").textContent = c.detail;
   }
@@ -221,6 +413,17 @@
         if (e.touched < live.get(stalest).touched) stalest = id;
       remove(stalest);
     }
+    // The HUD renders exactly one row legibly, so a focus that lags the
+    // conversation makes it *worse* than the second screen it replaces: the
+    // card for the question just asked would be the dim one, and every turn
+    // would start with a wheel. The newest arrival takes the focus; the wheel
+    // takes it straight back. This is a judgement, not a measurement — no run
+    // has touched it. SPEC § 4b records it as such.
+    if (WHEEL) {
+      const arriving = list.map((c) => c.id || c.label).filter((id) => live.has(id)).pop();
+      if (arriving) mark(arriving);
+    }
+    paint();
   }
 
   function wipe() {
@@ -228,6 +431,7 @@
     live.clear();
     selected = null;
     cards.innerHTML = '<div id="idle">listening</div>';
+    paint();
   }
 
   function connect() {
