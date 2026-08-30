@@ -1824,6 +1824,85 @@ standalone product.
   and registries → Container registry → Cleanup policy — keep N most recent,
   expire tags older than X, regex to exclude `main`) that should get turned
   on for all three repositories at some point.
+- **TODO: a pre-commit gate on what may be committed at all — not built.**
+  Nothing today stands between a staged file and a public repository. `origin`
+  carries two push URLs, so one `git push` publishes to GitLab *and* to the
+  public GitHub mirror `evanpthompson/gloss`; a mistake is public the moment it
+  lands, and a later `git rm` does not unpublish it. The stake here is
+  specifically prep packs: they name a company and a person, and per
+  `sessions/README.md` the source documents behind them routinely carry a
+  salary floor, a walk-away number and notes about the interviewer.
+
+  `.gitignore` is already allow-list shaped for the one directory anybody
+  thought about — `sessions/*` with `!sessions/README.md` and
+  `!sessions/example/` — and that is exactly the pattern to generalise. What it
+  does not cover, and what the hook is for: `git add -f`, which walks straight
+  past it; a new top-level directory nobody has ignored yet, because a
+  deny-list cannot enumerate what has not been invented; a real transcript or
+  recording dropped somewhere convenient; and a secret or a real name pasted
+  *inside* a file that is otherwise perfectly legitimate to commit.
+
+  Shape it as an allow-list, not a filter. Name the paths that may be
+  committed — source, tests, docs, `tools/`, `sessions/README.md`,
+  `sessions/example/`, `tools/results/*.json` — and refuse everything else with
+  a message saying which path was refused and how to override deliberately.
+  Then run the content scan over the staged *diff*: `tools/check_pack.py`
+  already has `LEAK_PATTERNS` and that file is honest that deny-listing is its
+  weaker half, so reuse it as the second layer rather than the first. High-value
+  additions on top: private key headers, `.env`-shaped `KEY=value` lines, long
+  base64 blobs, and the vendor key prefixes this project actually uses.
+
+  Two things that decide whether it is a gate or a decoration. **It has to be
+  installed where the commit happens**: `.git/hooks/` is not version-controlled,
+  so the hook must live in the tree (`hooks/pre-commit`) with
+  `git config core.hooksPath hooks` in the setup instructions, or it protects
+  exactly one clone. **And a hook is bypassable** — `--no-verify` is one flag —
+  so the same check has to run in CI, where the merge actually happens, which is
+  the only place its answer cannot be skipped. A gate that reports NOT RUN in
+  the environment that gates is not a gate.
+
+  Prove it before trusting it: stage a file with a planted key, a real-looking
+  pack under `sessions/`, and an ordinary source edit, and confirm the first two
+  are refused by name and the third goes through. A control believed to work and
+  not working is worse than none, because it gets budgeted against.
+
+  **Medium term, as its own phase: the second layer should read, not match.**
+  Everything above is patterns, and patterns only refuse what somebody already
+  thought to name. What they cannot see is the category that actually matters
+  here — a real company name used as an example in a doc, a salary target
+  paraphrased into prose so no number appears, a transcript excerpt pasted into
+  a test fixture because it was convenient, an interviewer's name in a commit
+  message, a doc asserting a control the code does not implement. Every one of
+  those is ordinary text by every regex and obvious to anything that reads.
+
+  So: an agent over the staged diff, answering one question — *would this be
+  fine on a public GitHub repository?* — and refusing with the specific line
+  and the reason. Four constraints, all of which follow from what it is:
+
+  - **It runs on pre-push, not pre-commit.** Reading is slow, and pushing is
+    the event that actually publishes; a ten-second gate on every commit gets
+    disabled within a week, which is a control that removes itself.
+  - **It is never the only layer, and never relaxes the first one.** An LLM
+    judgement is not reproducible, so it goes second: the deterministic gate
+    refuses what it can enumerate, and the reader is there for the rest. If
+    they disagree, the refusal wins.
+  - **It fails closed.** No key, no network, model errors, a response that will
+    not parse — all of those are a refusal to push, not a pass. "Could not
+    check" and "checked and clean" must never look the same, which is the exact
+    failure this whole item exists to prevent.
+  - **It has to be free.** There is no budget for a paid API on this project,
+    so the options are a local model, Claude Code invoked on the diff as part
+    of the commit routine, or CI-only. Whichever it is, the cost per push
+    belongs in this spec before it is built, not after.
+
+  One thing to design for rather than discover: the diff is text the model
+  reads as input, and a prep pack can contain arbitrary prose. Treat staged
+  content as data, never as instructions to the reviewer.
+
+  Prove this one the same way, with cases regex cannot reach: a paraphrased
+  salary expectation with no digits in it, a real employer name in an example
+  pack, and a clean refactor that must pass. If it cannot tell the third from
+  the first two, it is not ready to gate anything.
 
 ### Cannot be verified without hardware
 
