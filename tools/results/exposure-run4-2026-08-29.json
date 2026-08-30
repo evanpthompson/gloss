@@ -1,0 +1,42 @@
+{
+  "instrument": "exposure_test",
+  "ranAt": "2026-08-30T03:17:05.115Z",
+  "repsPerCell": 2,
+  "conditions": ["one", "today", "column"],
+  "durations": [150, 350, 800, 2000],
+  "maskMs": 250,
+  "distanceCm": 75,
+  "screen": { "w": 1680, "h": 1050, "dpr": 2, "viewport": [1340, 737] },
+  "exposureDriftMs": { "min": 0, "max": 17, "median": 16 },
+  "byCondition": [
+    { "condition": "one", "identityPct": 88, "factPct": 75 },
+    { "condition": "today", "identityPct": 88, "factPct": 38 },
+    { "condition": "column", "identityPct": 75, "factPct": 25 }
+  ],
+  "trials": [
+    { "condition": "column", "ms": 2000, "actualMs": 2000, "term": "CQRS", "identity": true, "fact": true },
+    { "condition": "today", "ms": 2000, "actualMs": 2016, "term": "Saga", "identity": true, "fact": false },
+    { "condition": "today", "ms": 150, "actualMs": 167, "term": "Idempotency", "identity": true, "fact": false },
+    { "condition": "today", "ms": 800, "actualMs": 817, "term": "Canary", "identity": true, "fact": true },
+    { "condition": "column", "ms": 350, "actualMs": 350, "term": "Dual write", "identity": true, "fact": false },
+    { "condition": "column", "ms": 150, "actualMs": 166, "term": "Error budget", "identity": true, "fact": false },
+    { "condition": "one", "ms": 2000, "actualMs": 2016, "term": "Golden signals", "identity": true, "fact": true },
+    { "condition": "one", "ms": 150, "actualMs": 167, "term": "Tail latency", "identity": true, "fact": true },
+    { "condition": "today", "ms": 350, "actualMs": 350, "term": "Consistent hashing", "identity": true, "fact": true },
+    { "condition": "column", "ms": 150, "actualMs": 166, "term": "Write amplification", "identity": false, "fact": false },
+    { "condition": "column", "ms": 800, "actualMs": 817, "term": "Blast radius", "identity": true, "fact": false },
+    { "condition": "today", "ms": 800, "actualMs": 817, "term": "Quorum", "identity": true, "fact": false },
+    { "condition": "one", "ms": 350, "actualMs": 366, "term": "Toil", "identity": false, "fact": true },
+    { "condition": "column", "ms": 800, "actualMs": 817, "term": "Sharding", "identity": true, "fact": false },
+    { "condition": "today", "ms": 2000, "actualMs": 2001, "term": "Leader election", "identity": true, "fact": true },
+    { "condition": "one", "ms": 150, "actualMs": 150, "term": "Exactly once", "identity": true, "fact": false },
+    { "condition": "column", "ms": 350, "actualMs": 366, "term": "Shadow traffic", "identity": false, "fact": false },
+    { "condition": "one", "ms": 800, "actualMs": 800, "term": "Backpressure", "identity": true, "fact": false },
+    { "condition": "today", "ms": 350, "actualMs": 366, "term": "Sidecar", "identity": true, "fact": false },
+    { "condition": "one", "ms": 2000, "actualMs": 2016, "term": "Load shedding", "identity": true, "fact": true },
+    { "condition": "column", "ms": 2000, "actualMs": 2017, "term": "Kestrel", "identity": true, "fact": true },
+    { "condition": "today", "ms": 150, "actualMs": 167, "term": "Thundering herd", "identity": false, "fact": false },
+    { "condition": "one", "ms": 800, "actualMs": 800, "term": "Feature flag", "identity": true, "fact": true },
+    { "condition": "one", "ms": 350, "actualMs": 367, "term": "Bulkhead", "identity": true, "fact": true }
+  ]
+}
