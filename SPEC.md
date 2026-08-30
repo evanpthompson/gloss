@@ -81,6 +81,15 @@ Teams/Zoom, keeping Slack pings out of the transcript. macOS is the platform
 that needs a virtual driver here — the reverse of the usual pattern — which
 is one reason A is Windows.
 
+**That is a choice about loopback, not about portability.** `a_listener.py`
+runs anywhere `soundcard` does — Windows, macOS and Linux — and Laptop A is a
+role rather than a platform: B's requirement is two websocket streams of 16-bit
+mono PCM, so an Android phone or anything else that can capture and send that
+can fill the role without running this file. What varies is only how the
+interviewer's voice is obtained: native on Windows, a PulseAudio monitor source
+on Linux, a virtual device such as BlackHole on macOS, and whatever the
+platform offers elsewhere.
+
 **The Bluetooth trap.** The instant anything opens the headset's mic, the
 whole link drops to HFP and output collapses to ~16 kHz mono — degrading
 transcription of the interviewer too, not just the user. Dodge: laptop
@@ -1824,6 +1833,15 @@ standalone product.
   and registries → Container registry → Cleanup policy — keep N most recent,
   expire tags older than X, regex to exclude `main`) that should get turned
   on for all three repositories at some point.
+
+  **This got sharper on 2026-08-30.** The `gloss-e2e` SHA tags are no longer
+  just history: gloss's `e2e` job pulls the three doubles *at the tag named by
+  `E2E_REF`*, so a cleanup policy that expires old SHA tags would break the
+  pin — an older gloss commit would stop being re-runnable, and the failure
+  would arrive as a pull error long after the deletion that caused it. Any
+  policy set on `gloss-e2e` must exclude tags a live `E2E_REF` points at, or
+  keep enough recent tags to cover the pin's lag. `gloss/b-server`'s SHA tags
+  carry no such constraint — nothing pins them.
 - **TODO: a pre-commit gate on what may be committed at all — not built.**
   Nothing today stands between a staged file and a public repository. `origin`
   carries two push URLs, so one `git push` publishes to GitLab *and* to the

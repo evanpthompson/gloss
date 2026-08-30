@@ -1,7 +1,18 @@
 """
-Phase 1, Laptop A (Windows): capture two audio sources and ship raw PCM to
-Laptop B. No processing, no API keys — this script never talks to Deepgram
-or Anthropic directly.
+Phase 1, Laptop A: capture two audio sources and ship raw PCM to Laptop B.
+No processing, no API keys — this script never talks to Deepgram or Anthropic
+directly.
+
+**Laptop A is a role, not a platform.** `soundcard` backs onto WASAPI on
+Windows, CoreAudio on macOS and PulseAudio on Linux, so this script runs on
+all three; what differs is how the interviewer's voice is captured, because
+loopback is the part operating systems disagree about. Windows exposes render
+loopback directly, Linux exposes it as a PulseAudio monitor source, and macOS
+has no OS-level loopback — it needs a virtual device (BlackHole or similar)
+first. Android cannot run this file at all, but it can be Laptop A: what B
+requires is two websocket streams of 16-bit mono PCM, and anything that can
+capture and send that qualifies. The contract is the portable part; this
+script is one implementation of it.
 
 - WASAPI loopback off the default speaker -> the interviewer's voice.
 - The laptop's built-in mic -> the user's voice. Deliberately NOT the

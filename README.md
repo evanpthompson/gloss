@@ -43,7 +43,10 @@ uv run b_server.py
 It listens on `ws://0.0.0.0:8765/interviewer` and `.../user`. Find this
 Mac's LAN IP with `ipconfig getifaddr en0` (or the relevant interface).
 
-**Laptop A (Windows):**
+**Laptop A** (below is PowerShell; `soundcard` also runs on macOS and Linux —
+see `a_listener.py` for what changes per platform, and note that Laptop A is a
+role any device can fill, Android included, by speaking the same PCM-over-
+websocket contract):
 
 ```
 uv sync
@@ -401,8 +404,16 @@ pass.
 | `test_display.py` | browser | card lifecycle and HUD mode in `display.html`, in real Chromium |
 
 The end-to-end audio pipe test lives in the separate `gloss-e2e` project; it
-needs two containers and a mocked Deepgram, and CI triggers it after this
-project's own tests pass.
+needs two containers and a mocked Deepgram, so CI runs it after this project's
+own tests pass — in the `e2e` stage of *this* pipeline, against a **pinned**
+harness. `E2E_REF` in `.gitlab-ci.yml` names the `gloss-e2e` commit this
+revision is verified against; its short form is the tag the three prebuilt test
+doubles are pulled at. The `e2e` job builds nothing: it pulls the doubles at
+that tag and pulls back **the b-server image the `build` stage just pushed**, so
+the suite exercises the exact artifact that gets published rather than a second
+build from the same commit. A green e2e run therefore names both revisions and
+stays reproducible from the gloss SHA. Bump `E2E_REF` in its own commit when the
+harness changes.
 
 ## Next (not built)
 
