@@ -415,6 +415,35 @@ build from the same commit. A green e2e run therefore names both revisions and
 stays reproducible from the gloss SHA. Bump `E2E_REF` in its own commit when the
 harness changes.
 
+## What may be committed
+
+`origin` pushes to GitLab **and** to the public GitHub mirror at once, so a
+mistake is public the moment it lands and `git rm` does not take it back.
+Enable the gate once per checkout:
+
+```bash
+git config core.hooksPath hooks
+```
+
+`tools/check_committable.py` then refuses, before the commit exists:
+
+- **any path not on the allow-list** in that file — which is what catches
+  `git add -f`, a directory nobody has ignored yet, and a stray file;
+- **credential shapes** on every added line — private keys, `sk-ant-`, `glpat-`,
+  hex API keys, credential assignments;
+- **prep-pack leak patterns** under `sessions/`, from the same table
+  `tools/check_pack.py` gates live packs with.
+
+Real prep packs are never committable: only `sessions/README.md` and
+`sessions/example/` are on the list.
+
+`--no-verify` skips the hook in one flag, so the same checker runs in CI over
+every tracked file (`--tree`, in the `test` job). A gate that exists only on the
+machine that wrote the commit is not a gate. What it cannot catch — a real
+company name used as an example, a salary figure paraphrased with no digits in
+it, a transcript pasted into a fixture — is written down in `SPEC.md` § Open
+items alongside the reading layer that would.
+
 ## Next (not built)
 
 - **Phase 5 — the overlay window.** The HUD ships on the second screen

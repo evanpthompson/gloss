@@ -1842,47 +1842,47 @@ standalone product.
   policy set on `gloss-e2e` must exclude tags a live `E2E_REF` points at, or
   keep enough recent tags to cover the pin's lag. `gloss/b-server`'s SHA tags
   carry no such constraint — nothing pins them.
-- **TODO: a pre-commit gate on what may be committed at all — not built.**
-  Nothing today stands between a staged file and a public repository. `origin`
-  carries two push URLs, so one `git push` publishes to GitLab *and* to the
-  public GitHub mirror `evanpthompson/gloss`; a mistake is public the moment it
-  lands, and a later `git rm` does not unpublish it. The stake here is
-  specifically prep packs: they name a company and a person, and per
-  `sessions/README.md` the source documents behind them routinely carry a
-  salary floor, a walk-away number and notes about the interviewer.
+- **A pre-commit gate on what may be committed at all — built 2026-08-30.**
+  `tools/check_committable.py`, with `hooks/pre-commit` as the local half and
+  the same file run with `--tree` in CI as the half that cannot be skipped.
+  The reason it exists: `origin` carries two push URLs, so one `git push`
+  publishes to GitLab *and* to the public GitHub mirror at the same moment.
+  There is no window between committed and public, and `git rm` does not
+  unpublish. The stake is prep packs above all — they name a company and a
+  person, and per `sessions/README.md` the documents behind them routinely
+  carry a salary floor and a walk-away number.
 
-  `.gitignore` is already allow-list shaped for the one directory anybody
-  thought about — `sessions/*` with `!sessions/README.md` and
-  `!sessions/example/` — and that is exactly the pattern to generalise. What it
-  does not cover, and what the hook is for: `git add -f`, which walks straight
-  past it; a new top-level directory nobody has ignored yet, because a
-  deny-list cannot enumerate what has not been invented; a real transcript or
-  recording dropped somewhere convenient; and a secret or a real name pasted
-  *inside* a file that is otherwise perfectly legitimate to commit.
+  Three checks, all failing closed. **The path allow-list** is the primary one
+  and refuses anything not named in `ALLOWED`, which is what catches `git
+  add -f`, a directory nobody has ignored yet, and a stray file. `.gitignore`
+  covers the case somebody thought about; this covers the rest. **Credential
+  shapes** run over every added line — private keys, vendor prefixes, hex keys,
+  assignments. **Prep-pack leak patterns** reuse `check_pack.py`'s
+  `LEAK_PATTERNS` table rather than copying it, and apply to `sessions/` only:
+  everywhere else that table fires on prose *about* the risk, which this very
+  paragraph would trip.
 
-  Shape it as an allow-list, not a filter. Name the paths that may be
-  committed — source, tests, docs, `tools/`, `sessions/README.md`,
-  `sessions/example/`, `tools/results/*.json` — and refuse everything else with
-  a message saying which path was refused and how to override deliberately.
-  Then run the content scan over the staged *diff*: `tools/check_pack.py`
-  already has `LEAK_PATTERNS` and that file is honest that deny-listing is its
-  weaker half, so reuse it as the second layer rather than the first. High-value
-  additions on top: private key headers, `.env`-shaped `KEY=value` lines, long
-  base64 blobs, and the vendor key prefixes this project actually uses.
+  Installed per checkout with `git config core.hooksPath hooks`, because
+  `.git/hooks` is not version-controlled and a hook that lives there protects
+  exactly one clone. `--no-verify` skips it in one flag, which is why the same
+  checker runs in the `test` job over every tracked file.
 
-  Two things that decide whether it is a gate or a decoration. **It has to be
-  installed where the commit happens**: `.git/hooks/` is not version-controlled,
-  so the hook must live in the tree (`hooks/pre-commit`) with
-  `git config core.hooksPath hooks` in the setup instructions, or it protects
-  exactly one clone. **And a hook is bypassable** — `--no-verify` is one flag —
-  so the same check has to run in CI, where the merge actually happens, which is
-  the only place its answer cannot be skipped. A gate that reports NOT RUN in
-  the environment that gates is not a gate.
+  **Two holes were found by proving it rather than by reading it, and both
+  passed a planted key through a hook that reported OK.** First, the exemption
+  for `api_key=DEEPGRAM_API_KEY` — a reference is not a literal — was written
+  as `^[A-Za-z_][A-Za-z0-9_]*$`, and a 40-character hex key *is* a valid
+  identifier. Second, and worse because it disabled two rules at once, the name
+  match began with `\b`: a key name is almost always a suffix
+  (`DEEPGRAM_API_KEY`, `GITLAB_REPO_TOKEN`), and `_` is a word character, so
+  there is no boundary before `API_KEY` and neither rule ever fired. The
+  planted-case suite is five files — a stray file, a `.env` backup, a
+  force-added prep pack, an `sk-ant-` key and a hex key — and all five are now
+  refused by name while an ordinary source change passes.
 
-  Prove it before trusting it: stage a file with a planted key, a real-looking
-  pack under `sessions/`, and an ordinary source edit, and confirm the first two
-  are refused by name and the third goes through. A control believed to work and
-  not working is worse than none, because it gets budgeted against.
+  **What it does not catch, stated rather than implied:** a real company name
+  used as an example, a salary figure paraphrased into prose with no digits,
+  an all-letter secret with no digits in it, and a transcript excerpt in a test
+  fixture. Every one of those is ordinary text to a regex.
 
   **Medium term, as its own phase: the second layer should read, not match.**
   Everything above is patterns, and patterns only refuse what somebody already

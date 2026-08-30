@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Refuse to commit anything that must not reach a public repository.
+#
+# Lives in the tree rather than in .git/hooks, which is not version-controlled
+# and would protect exactly one clone. Enable it once per checkout:
+#
+#     git config core.hooksPath hooks
+#
+# That is also the hole: a clone where nobody ran it has no hook at all, and
+# `--no-verify` skips it in one flag. So this is the fast local half only —
+# CI runs the same checker with --tree, in the environment where merges
+# happen, which is the half that cannot be skipped.
+set -euo pipefail
+
+cd "$(git rev-parse --show-toplevel)"
+
+if ! command -v uv > /dev/null 2>&1; then
+  echo "pre-commit REFUSED: uv is not installed, so the check could not run." >&2
+  echo "  A check that could not run is not a pass. Install uv, or commit with" >&2
+  echo "  --no-verify deliberately and let CI answer instead." >&2
+  exit 1
+fi
+
+exec uv run --quiet python tools/check_committable.py --staged
