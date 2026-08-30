@@ -228,7 +228,7 @@ exposure rather than legibility and are withdrawn. Response rate and reaction
 time are unaffected and are what the conclusions rest on.
 
 ```bash
-open tools/exposure_test.html   # run 3: the current instrument
+open tools/exposure_test.html   # runs 3-4: the current instrument
 ```
 
 **Run this one, not the glance test.** The card appears for a fixed time,
@@ -247,6 +247,26 @@ that *does* display the detail scored the same as the ones that do not. See
 `SPEC.md` § 4b. **The fix is better probe pairs, not more trials**; the corpus
 needs rewriting before a re-run is worth anyone's five minutes.
 
+**Run 4 has been run (2026-08-29) against the rewritten corpus, and its fact
+column is void too** — `tools/results/exposure-run4-2026-08-29.json`. This time
+the pairs held: the two conditions that display no detail pooled to exactly
+8/16 = 50.0%, where run 3's pooled to 91% on its broken pairs. What failed is
+the gate. The pre-registered falsifier — *either control above roughly 70% means
+the probe still leaks* — tripped on `one` at 6/8, and at 8 trials per control a
+sound instrument trips it once in four runs (26.8%) while having only 37% power
+to catch a real leak. **A threshold whose false-alarm rate was never computed is
+not a gate**, and the run is void by its own pre-registered rule either way.
+Nothing separates the conditions (6/8, 3/8, 2/8; χ² p ≈ 0.11), and the condition
+that shows the detail did not beat the ones that do not.
+
+**The corpus size is the binding constraint now.** The harness refuses to reuse
+a card, so a session cannot exceed 29 trials and every three-way run is pinned
+at 8 per cell. A control needs n ≈ 28 to answer. See `SPEC.md` § 4b run 4 for
+the split that would have fixed it. **That run was never done: the measurement
+track was stopped on 2026-08-29** when cards became persistent, which retires
+the question a fixed-exposure test was asking. The fact column stays void and
+uncited across all four runs.
+
 ```bash
 open tools/wheel_hud.html       # the display both participants preferred
 ```
@@ -260,10 +280,10 @@ dwell delay and print the settings as JSON. Nothing here has been measured.
 
 | file | what it is |
 |---|---|
-| `tools/exposure_test.html` | **run 3, current.** Fixed exposure, masked, arbitrary-fact probe |
+| `tools/exposure_test.html` | **runs 3–4, current.** Fixed exposure, masked, arbitrary-fact probe |
 | `tools/glance_test.html` | runs 1–2. Self-terminated; its accuracy columns are withdrawn |
 | `tools/wheel_hud.html` | the prototype the HUD came from. Superseded by `?mode=wheel`; kept because its sliders are how the numbers were found |
-| `tools/cards_corpus.js` | the 32 cards all three share, and what each probe does not measure. **Its `fact` pairs are known broken — see `SPEC.md` § 4b run 3** |
+| `tools/cards_corpus.js` | the 32 cards all three share, and what each probe does not measure. **All 32 `fact` pairs were rewritten 2026-08-29 after run 3 voided them, and are pre-registered symmetric in its header** |
 | `tools/results/` | raw run JSON, kept for provenance rather than re-typed into prose |
 
 ## HUD mode (`?mode=wheel`)
@@ -338,8 +358,8 @@ A Bluetooth presenter clicker drives the display — it is an HID keyboard, so
 |---|---|
 | `→` `PageDown` `space` | select next card |
 | `←` `PageUp` | select previous card |
-| `Enter` `p` | pin / unpin (a pinned card ignores its TTL) |
-| `Backspace` `Delete` `x` | dismiss |
+| `Enter` `p` | pin / unpin (a pinned card is the last one evicted) |
+| `Backspace` `Delete` `x` | dismiss (or just click the card) |
 | `b` `.` `F5` | blank / unblank the screen |
 | `Esc` | clear selection |
 
@@ -392,11 +412,14 @@ project's own tests pass.
   click-through, and excluded from screen capture. The page does not change; the
   phase is the shell. `SPEC.md` § Phase 5 has the comparison, why capture
   exclusion is the row that decides it, and the two things to settle first.
-- **Rewrite the 32 `fact`/`factDistractor` pairs in `tools/cards_corpus.js`,
-  then re-run run 3.** Run 3 happened and its detail column is void — the
-  distractors are implausible, so the probe is answerable without the card
-  (`SPEC.md` § 4b). Nothing about how much text a card can carry is settled, and
-  it gates Phase 5.
+- ~~A fifth glance-test run.~~ **Dropped 2026-08-29, and the fact column stays
+  void and uncited.** Cards now stay up until they are dismissed, so the
+  question all four runs were built to answer — how much a card delivers in a
+  fixed 150 ms to 2 s exposure — is no longer a question about this product:
+  the conversation sets the exposure, not the display. What survives is the
+  identity result, that a term is locked in about 150 ms, which is the number
+  the HUD's one-legible-row design actually rests on. `SPEC.md` § Card
+  interaction has the decision.
 - **Tier 2 post-call research export.** Unchanged from the original plan and
   still not started.
 - **Expand / go deeper on a card.** Raised 2026-08-28; **judged not essential to

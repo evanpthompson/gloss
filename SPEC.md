@@ -142,8 +142,9 @@ during it.
 
 ## Display
 
-Three content cards maximum, each clearing itself ~90 seconds after the last
-turn that raised its topic. No transcript.
+Three content cards maximum, each staying until it is dismissed — clicked, or
+`Backspace`/`Delete`/`x` on the clicker — or until the cap pushes it off. No
+clock, and no transcript.
 
 New topics **append**; a topic already on screen updates **in place**, keeping
 its position, so the eye does not have to re-find a card it has already located.
@@ -176,9 +177,11 @@ the source of truth for it. As of 2026-08-25:
 }]}
 ```
 
-On the wire to the display each card also carries `ttl` (seconds), and the
+On the wire to the display each card also carries `ttl` (seconds) and the
 batch carries `max` — so lifecycle is the server's policy and a display opened
-mid-call is configured by the first message it receives.
+mid-call is configured by the first message it receives. **A `ttl` of `0` means
+no clock: the card stays until it is dismissed**, which is what content cards
+now send. Status and preview cards still send a real one.
 
 Phase 4 § HUD mode revisits this display as a heads-up surface rather than a
 second screen — form and position carrying meaning before any word is read, and
@@ -243,7 +246,8 @@ instead of beside it: transparent, frameless, above a full-screen call,
 click-through, and excluded from screen capture. Nothing in the page changes;
 the whole phase is the shell around it. Specced in § Phase 5 below, including
 why capture exclusion is the requirement that decides which shell, and the
-prerequisite that run 3 of the glance test be run by a human first — Phase 5 is
+prerequisite that a glance-test run first produce a readable fact column —
+runs 3 and 4 have both been run by a human and both are void (§ 4b). Phase 5 is
 a bet on the HUD form, and that bet should not be placed on an unmeasured
 display.
 
@@ -271,10 +275,13 @@ Presenters disagree about what they emit, so several keys map to each action.
 The first press selects the newest card, which is the one most likely to be
 acted on.
 
-**Pin is the load-bearing one.** A topic stays live after the model has moved on
-to something else, and the card would otherwise clear itself on its TTL. A
-pinned card ignores its TTL and every refresh of it — a pin that came undone
-because the server sent the same card again would be worse than no pin.
+**Pin protects a card from eviction.** It was written when cards cleared
+themselves on a 90-second clock, and it meant "ignore the clock"; since cards
+now stay until dismissed, what is left for it to protect against is the cap —
+a pinned card is the last thing pushed off when a fourth topic arrives. A card
+that still carries a TTL (status, preview) also has it suspended while pinned,
+and a pin that came undone because the server sent the same card again would be
+worse than no pin.
 
 **Blank is the second most useful and was not in the original sketch.** Someone
 walks up; one button and the screen is empty. It hides rather than pauses:
@@ -697,6 +704,92 @@ at chance — so **the fix is better pairs, not more trials.** Rewrite all 32
 that judgement, and re-run the same 24 trials. Until then nothing in § 4b's
 detail column may be cited, including in the story bank.
 
+**The rewrite was done 2026-08-29, and run 4 ran that evening — its own
+section follows.** All 32 pairs in
+`tools/cards_corpus.js` were rewritten under one rule applied before the run —
+*would an experienced engineer reject one of these two out of hand?* — and the
+six symmetric pairs run 3 already contained were kept untouched as the
+template. Three cards needed their `detail` moved rather than just their
+distractor, because the correct answer was the field's own canonical value and
+so was recoverable without the card: `Idempotency` (24 hours is Stripe's
+default → 72 hours), `Canary` (five percent is the canonical first slice →
+three percent, label included) and `Error budget` (43 minutes a month *is*
+99.9% → 90 minutes). Run 4 is therefore not comparable to run 3 on those three
+items, which costs nothing, because run 3's fact column is void. **All 32 pairs
+are pre-registered symmetric in the corpus header**, so there is no post-hoc
+subset this time — the control is the whole run, and the falsifier is that
+`one` and `column` must land near 50%. If either clears roughly 70% the probe
+is still leaking, the fact column is void for a fourth time, and Phase 5 does
+not start. The corpus header also records what nothing checks: plausibility
+itself is a human judgement living in a comment, not an assertion — which is
+the failure mode that produced this rewrite.
+
+**Run 4 — ran 2026-08-29, 75cm, 24 trials, rewritten corpus. THE
+PRE-REGISTERED FALSIFIER TRIPPED — AND THE GATE ITSELF WAS BADLY BUILT.** Raw
+JSON: `tools/results/exposure-run4-2026-08-29.json`.
+
+| condition | shows detail? | identity | fact |
+|---|---|---|---|
+| `one` | no | 7/8 = 88% | **6/8 = 75%** |
+| `today` | **yes** | 7/8 = 88% | 3/8 = 38% |
+| `column` | no | 6/8 = 75% | 2/8 = 25% |
+| **controls pooled** | no | — | **8/16 = 50.0%** |
+
+**The falsifier as written was: if either control clears roughly 70%, the probe
+is still leaking. `one` scored 75%. It tripped, so the fact column is void for a
+fourth time.** That is the pre-registered reading and it stands. Writing the
+threshold down before the run was precisely so it could not be argued away
+after, and it is being obeyed on the run where obeying it is inconvenient.
+
+**But the gate was under-designed, and that is this run's real finding.** At 8
+trials per control a *sound* probe produces 6/8 or better 14.5% of the time, so
+across two controls **the falsifier fires on a perfect instrument roughly once
+in four runs** (26.8%). A threshold whose false-alarm rate was never computed is
+not a gate. It fails in the other direction too: at n=8 the control check has
+**37% power** to detect a real 75% leak, so a control that *passes* at this size
+proves nothing either. Under this project's own rule — a check that could not
+run is not a pass — this check could not answer in either direction, and the
+pre-registration should have carried a trial count as well as a threshold.
+
+**What the pairs did do.** The run-3 mechanism is absent. There, both controls
+rose *together* on the asymmetric pairs (91% pooled) — which is what a leak
+looks like, because it lifts every condition that can guess. Here the controls
+sit on opposite sides of chance, 75% and 25%, pooling to exactly 8/16 = 50.0%.
+That is the signature of noise, not of a leak, and it is the first time the
+controls have pooled to chance across a whole run. Evidence for the rewrite —
+but at n=16, weak evidence.
+
+**Nothing separates the conditions.** 6/8, 3/8 and 2/8 across `one`, `today` and
+`column` is χ² = 4.4 on 2 df, p ≈ 0.11. `today` at 3/8 is not distinguishable
+from chance either (p = 0.36, one-sided). **The condition that displays the
+detail did not beat the two that display none** — and with 8 trials per cell the
+run could not have shown it if it had. No reading of the detail column is
+available, including the tempting one.
+
+**Timing, for the record: exposure drift median 16 ms, max 17.** Every exposure
+ran exactly one frame long at 60 Hz, because the `requestAnimationFrame` loop
+can only stop on a frame boundary. That is a systematic floor, not drift, and
+run 3's median of 0 was the anomaly. At 150 ms it is +11%; it changes no reading
+here, but it should be reported as what it is.
+
+**The corpus size is now the binding constraint, and it is the thing to fix.**
+`exposure_test.html` fails closed rather than reusing a card, so a session can
+never exceed 32 − 3 = 29 trials, and `reps` is capped at 2. Three conditions ×
+four durations therefore pins every run at 24 trials and 8 per cell, in
+perpetuity. A control needs **n ≈ 28** to detect a 75% leak at 80% power
+(reject at ≥ 19/28); separating conditions needs more still. **§ 4b cannot be
+answered by this instrument at this corpus size, however many times it is run.**
+
+**So run 4 settles nothing about 4b and one thing about the method:** the next
+run must not be another 24-trial three-way. Split the two questions the
+instrument has been asked to answer at once. First validate the probe with a
+**control-only run** — `one` and `column`, one duration, 28 trials, pooled n=28,
+pre-registered to reject at ≥19/28 — which needs the `reps` cap lifted and no
+new cards. Only once the probe is known sound is it worth spending a
+three-way comparison on it, and that comparison needs a corpus of roughly 64
+cards to reach 16 trials a cell.
+
+
 **Folded into `display.html` behind `?mode=wheel`, 2026-08-27.** The prototype
 is now a mode of the real display rather than a file beside it. No flag is the
 second screen, unchanged.
@@ -806,9 +899,14 @@ flips interactive while the pointer is over the column.
 
 **Prerequisites, in order:**
 
-1. **Run 3 of the glance test, by a human.** Phase 5 is a bet on the HUD form.
-   `tools/exposure_test.html` is verified headless only, and § 4b's reading of
-   how much text a card can carry has no human run behind it yet.
+1. **A glance-test run that can actually answer.** Runs 3 and 4 have both been
+   run by a human and both fact columns are void — run 3 because the probe
+   leaked, run 4 because the pre-registered gate tripped on a control check too
+   small to answer in either direction. The next step is a **control-only
+   validation run** (`one` and `column`, 28 trials, pooled n=28, reject at
+   ≥19/28), which needs the `reps` cap in `tools/exposure_test.html` lifted and
+   no new cards. A three-way comparison needs roughly 64 corpus cards. Phase 5
+   is a bet on the HUD form and that bet is still unmeasured.
 2. **A decision on whether a new card takes the focus** (§ 4b, decision 1). On a
    second screen a wrong answer costs a wheel flick. On an overlay held in the
    visual field for a whole call it is the difference between a tool and a
@@ -821,6 +919,41 @@ application underneath. A capture exclusion that is believed to work and does
 not is worse than no overlay, because it gets budgeted against.
 
 #### Card interaction — the backlog, and what is already built
+
+**Cards stay until they are dismissed — decided 2026-08-29, and it stops the
+measurement track.** A content card has no TTL (`GLOSS_CARD_TTL_S=0`); it
+leaves when it is clicked, when `Backspace`/`Delete`/`x` dismisses it, or when
+the cap pushes it off. The 90-second clock is gone.
+
+The reason is a use report, not a run: *"half of the cards I couldn't see, and
+it depends on what is happening."* A card cannot know when the call will let
+you look up. Sometimes that is two seconds after it appears and sometimes it is
+after the answer you were mid-way through giving, and a clock set from the
+model's turn is set from the wrong event entirely. The failure was silent in
+the worst way — the card was there, correct, and gone before the moment to read
+it arrived.
+
+**This retires the question § 4b was built to answer.** Four runs asked how much
+a card can deliver in a fixed exposure of 150 ms to 2 s. That framing assumed
+the *display* chooses the exposure. It does not; the conversation does, and the
+answer to "how long is the card up" is now "until you are done with it". The
+control-validation run is not worth building, the corpus does not need growing
+to 64 cards, and the fact column stays void and uncited rather than being
+chased a fifth time. What survives from all four runs is the identity result —
+a term is locked in ~150 ms, 20/24 across run 4's conditions — and that is the
+number the HUD's one-legible-row design actually rests on.
+
+**What still carries a clock, and why.** Status cards (`GLOSS_ERROR_TTL_S`,
+20 s) and unconfirmed previews (`GLOSS_PREVIEW_TTL_S`, 12 s). Nobody dismisses
+a message about a vendor outage that has already ended, so a status card that
+waits to be dismissed is a display asserting a problem that no longer exists —
+the one failure mode this project treats as worse than showing nothing.
+
+**And the cap is now load-bearing on its own.** With no clock, `GLOSS_MAX_CARDS`
+is the only thing standing between the display and a wall of stale topics,
+which is why eviction stays least-recently-mentioned and why pinning had to be
+re-read as protection from *eviction* rather than from a clock.
+
 
 Raised 2026-08-28: cards should tile so a new one arrives alongside a few
 existing ones and old topics fade off as they are displaced; a key should pin a
@@ -835,9 +968,9 @@ that is real work.
 |---|---|
 | tile, N visible, older topics fade off | cards mode, `GLOSS_MAX_CARDS` (default 3) |
 | replaced rather than cleared | eviction by *least-recently-mentioned*, not oldest-created: a topic the conversation returns to outlives a one-off from earlier |
-| fade rather than snap | 220 ms opacity transition on removal; 90 s TTL per card (`GLOSS_CARD_TTL_S`) |
-| pin a card | `Enter` / `p` on the clicker — ignores its TTL and every refresh of it |
-| dismiss a card | `Backspace` / `Delete` / `x` |
+| fade rather than snap | 220 ms opacity transition on removal. No TTL on content cards since 2026-08-29 (`GLOSS_CARD_TTL_S=0`) — they leave when dismissed |
+| pin a card | `Enter` / `p` on the clicker — last to be evicted when the cap is reached |
+| dismiss a card | **click the card**, or `Backspace` / `Delete` / `x` |
 
 Covered by `tests/test_eviction.py` and `tests/test_display.py`. Nothing to do.
 
@@ -1209,8 +1342,8 @@ card lifecycle exists to prevent.
 
 Belt and braces: a preview also carries a short `GLOSS_PREVIEW_TTL_S` (12s), so
 an unconfirmed guess fades on its own even if the enrichment pass never returns
-at all. When the model confirms it, the same card is rewritten with the full
-90s TTL.
+at all. When the model confirms it, the same card is rewritten with no TTL at
+all and from then on stays until it is dismissed.
 
 Set `GLOSS_PREVIEW=` empty to turn it off and wait for the model every turn.
 
@@ -1621,11 +1754,14 @@ card dropped for missing an id would be a real card lost over bookkeeping. The
 fallback produces the same id the model would have supplied, so a turn where it
 forgets stays continuous with the turns where it does not.
 
-Each card expires `GLOSS_CARD_TTL_S` (default 90) after the last turn that
-raised it, and the clock is refreshed when the topic recurs. When more topics
-are live than `GLOSS_MAX_CARDS`, the **least recently mentioned** is dropped —
-not the oldest — so a thread the conversation keeps returning to outlives a
-one-off from earlier.
+Each card stays until it is dismissed: `GLOSS_CARD_TTL_S` defaults to `0`,
+which the display reads as "no clock". Set it above zero to restore the old
+90-second expiry, in which case the clock is refreshed when the topic recurs.
+When more topics are live than `GLOSS_MAX_CARDS`, the **least recently
+mentioned** is dropped — not the oldest — so a thread the conversation keeps
+returning to outlives a one-off from earlier. With no clock that cap is the
+only bound on the screen, which is why it is absolute even when everything is
+pinned.
 
 **Error cards sit outside that cap** and expire on their own much shorter
 `GLOSS_ERROR_TTL_S` (default 20). Counting them was the first implementation and
