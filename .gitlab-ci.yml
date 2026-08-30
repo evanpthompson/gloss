@@ -1,7 +1,7 @@
 stages:
   - test
   - build
-  - trigger-e2e
+  - e2e
 
 # Unit and integration tests. Runs before the image is built, so a broken
 # provider chain cannot be pushed to the registry and then discovered by the
@@ -67,23 +67,86 @@ build-b-server:
   rules:
     - if: '$CI_COMMIT_BRANCH == "main"'
 
-# The E2E pipe test lives in the separate gloss-e2e project, which checks this
-# project out as a sibling and runs against it — it needs two containers and a
-# mocked Deepgram, which is why it is not in the `test` stage above. This job
-# makes sure it actually runs whenever main changes here, instead of only
-# running when someone happens to push to the e2e repo.
-trigger-e2e-tests:
-  stage: trigger-e2e
-  trigger:
-    project: navetoocool/gloss-e2e
-    branch: main
-    strategy: depend
+# The E2E pipe test. The harness — three containerised test doubles and a
+# mocked Deepgram — lives in the separate gloss-e2e project, which is why this
+# is not in the `test` stage above.
+#
+# This used to be a multi-project trigger into gloss-e2e. That ran the suite,
+# but the harness a gloss commit passed under was "whatever gloss-e2e's main
+# happened to be when the downstream job started", so a green verdict was not
+# reproducible from the gloss SHA alone: re-running an old pipeline tested it
+# against today's harness, and a harness change could turn a red run green
+# without a single line of gloss changing.
+#
+# Now gloss pins the harness. E2E_REF names the gloss-e2e commit this revision
+# is verified against, its short form is the tag the three prebuilt doubles are
+# pulled at, and both halves move together in one commit here — so the pin is
+# reviewable and a green run names both revisions.
+#
+# Nothing is built here. The b-server image under test is the one the `build`
+# stage just pushed, pulled back by its immutable `:<short-sha>` tag — so the
+# suite exercises the exact artifact that gets published rather than a second
+# build from the same commit. gloss-e2e is the harness and knows nothing about
+# this project's source; it takes a server image and runs it.
+e2e:
+  stage: e2e
+  image: docker:27
+  services:
+    - docker:27-dind
   variables:
-    # Name the commit under test. Without this the e2e clones whatever this
-    # project's main happens to be when its own job starts, which is not
-    # necessarily the commit that triggered it — two pushes landing close
-    # together and the e2e reports green for code it never built. It refuses
-    # to run rather than test the wrong revision.
-    GLOSS_COMMIT_SHA: $CI_COMMIT_SHA
+    DOCKER_HOST: tcp://docker:2376
+    DOCKER_TLS_CERTDIR: "/certs"
+    DOCKER_TLS_VERIFY: "1"
+    DOCKER_CERT_PATH: "/certs/client"
+    # The gloss-e2e commit this revision of gloss is verified against. Bump it
+    # deliberately, in its own commit, when the harness changes — that commit
+    # is the record of which harness verified what.
+    E2E_REF: 8c137c6dcd21ccb50b7ad6bdb4638f9da7620399
+    E2E_REGISTRY: registry.gitlab.com/navetoocool/gloss-e2e
+  before_script:
+    - apk add --no-cache git bash docker-cli-compose
+    - export E2E_TAG="$(printf '%s' "$E2E_REF" | cut -c1-8)"
+    - export B_SERVER_IMAGE="$CI_REGISTRY_IMAGE/b-server:$CI_COMMIT_SHORT_SHA"
+    # Cloned with CI_JOB_TOKEN rather than a stored PAT: it is issued per job,
+    # expires with it, and cannot be leaked into a CI variable. It only reaches
+    # another project if that project allows it —
+    #   gloss-e2e -> Settings -> CI/CD -> Job token permissions -> allow gloss.
+    #
+    # Not shallow. A --depth clone would not contain E2E_REF the moment the pin
+    # lags a few commits behind gloss-e2e's main, and the failure would arrive
+    # as a confusing checkout error rather than as "the pin is old".
+    - |
+      git clone --quiet "https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/navetoocool/gloss-e2e.git" gloss-e2e || {
+        echo ""
+        echo "Could not clone navetoocool/gloss-e2e."
+        echo "git reports this as a generic HTTP Basic failure, which is not"
+        echo "actionable, so: CI_JOB_TOKEN only reaches another project if that"
+        echo "project allows it. Fix in gloss-e2e: Settings -> CI/CD -> Job"
+        echo "token permissions -> add navetoocool/gloss to the allowlist."
+        exit 1
+      }
+    - |
+      git -C gloss-e2e checkout -q "$E2E_REF" || {
+        echo ""
+        echo "E2E_REF $E2E_REF is not a commit in gloss-e2e."
+        echo "Either the pin is wrong, or it names a commit that was rewritten"
+        echo "or never pushed. Refusing to fall back to main: testing against"
+        echo "an unpinned harness is the thing this job exists to stop."
+        exit 1
+      }
+    - docker login -u gitlab-ci-token -p "$CI_JOB_TOKEN" registry.gitlab.com
+    # All four pulls are REQUIRED, deliberately without `|| true`: these are
+    # the harness and the artifact under test, not cache seeds. run_e2e.sh
+    # checks for them again before starting, because `compose up` would
+    # otherwise fall back to any local image holding the tag.
+    - docker pull "$E2E_REGISTRY/mock-deepgram:$E2E_TAG"
+    - docker pull "$E2E_REGISTRY/mock-display:$E2E_TAG"
+    - docker pull "$E2E_REGISTRY/mock-listener:$E2E_TAG"
+    # The image the build stage just pushed — not a rebuild from this source.
+    # The suite therefore exercises the exact artifact that gets published,
+    # rather than a second build that merely came from the same commit.
+    - docker pull "$B_SERVER_IMAGE"
+  script:
+    - E2E_PREBUILT=1 ./gloss-e2e/run_e2e.sh
   rules:
     - if: '$CI_COMMIT_BRANCH == "main"'
