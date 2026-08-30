@@ -312,8 +312,20 @@ def main() -> int:
         paths = staged_paths() if args.staged else [
             p for p in run("ls-files", "-z").split("\0") if p
         ]
+    except FileNotFoundError:
+        # Caught separately because it is the one that actually happened: the
+        # CI image (uv:python3.13-bookworm-slim) has no git binary, since
+        # GitLab clones with a helper container and the job container never
+        # needs one. A gate that could not run is not a pass, and it has to
+        # say why in one line rather than in a traceback.
+        print(
+            "REFUSED — `git` is not on PATH, so this check could not run.\n"
+            "  A check that could not run is not a pass. Install git in this\n"
+            "  environment; do not skip the step.",
+            file=sys.stderr,
+        )
+        return 1
     except subprocess.CalledProcessError as exc:
-        # A gate that could not run is not a pass.
         print(f"REFUSED — git would not answer: {exc}", file=sys.stderr)
         return 1
 

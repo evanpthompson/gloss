@@ -37,6 +37,13 @@ test:
     # local one and `--no-verify` skips it in a single flag, so the same
     # checker runs here over every tracked file — a gate that only exists on
     # the machine that wrote the commit is not a gate.
+    #
+    # git is installed explicitly because this image does not ship it: GitLab
+    # clones with a helper container, so the job container never needs one and
+    # the check died on `FileNotFoundError: 'git'` the first time it ran here.
+    # It asks git which files are tracked rather than walking the filesystem,
+    # which would mean reimplementing .gitignore to avoid scanning .venv.
+    - apt-get update -qq && apt-get install -y -qq --no-install-recommends git
     - uv run python tools/check_committable.py --tree
     - uv run playwright install --with-deps chromium
     - uv run pytest --timeout=60
