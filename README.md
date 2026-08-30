@@ -431,6 +431,11 @@ git config core.hooksPath hooks
   `git add -f`, a directory nobody has ignored yet, and a stray file;
 - **credential shapes** on every added line — private keys, `sk-ant-`, `glpat-`,
   hex API keys, credential assignments;
+- **env-var-shaped assignments of opaque literals** — `SCREAMING_SNAKE` then
+  `=` or `:` then one long run of token characters. This one matches the
+  *shape* rather than a list of names, because the line that leaks will be
+  called something nobody listed. The same rule runs machine-wide from
+  `~/.config/git/hooks`;
 - **prep-pack leak patterns** under `sessions/`, from the same table
   `tools/check_pack.py` gates live packs with.
 

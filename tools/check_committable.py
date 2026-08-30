@@ -143,6 +143,48 @@ REFERENCE = re.compile(
     r")$"
 )
 
+# An env-var-shaped assignment of an opaque value: SCREAMING_SNAKE, then `=`
+# or `:`, then something long with no spaces in it. This is the shape rather
+# than the name, which is the point — a keyword list only refuses names
+# somebody already thought of, and the line that leaks will be called
+# something nobody listed.
+#
+# The value side is what keeps it usable. `MAX_CARDS = 3`, `HOST: "0.0.0.0"`
+# and `TTL = float(...)` are the overwhelming majority of SCREAMING_SNAKE
+# lines in any repo, so a rule that fired on the name alone would be noise,
+# and a check that is noise gets turned off — which is worse than not having
+# it, because it is believed to be running.
+ENV_ASSIGNMENT = re.compile(
+    r"^\s*(?:export\s+|[-\s]*)?(?P<name>[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+)"
+    r"\s*[:=]\s*"
+    r"[\"\']?(?P<val>[^\s\"\']{16,}?)[\"\']?\s*$"
+)
+
+# The value has to look like an opaque token, and this is an allow-list of
+# shape rather than a list of things to skip. Measured against this repo, the
+# entire false-positive population of a name-only rule was ordinary code:
+#
+#   DEEPGRAM_ENVIRONMENT = DeepgramClientEnvironment.PRODUCTION
+#   CARD_SCHEMA = card_schema(MAX_CARDS)
+#   CONNECTION_ERRORS = _connection_error_types()
+#   E2E_REGISTRY: registry.gitlab.com/navetoocool/gloss-e2e
+#
+# Every one contains a character a secret never does — a parenthesis, a dot, a
+# path separator in a hostname. A key is one run of token characters, so that
+# is what this matches, plus a digit and a letter to rule out a word.
+#
+# The known gap: a JWT has dots in it and is missed here. It is caught by
+# nothing else either, and saying so is better than widening this until it
+# fires on every attribute access in the repo and gets switched off.
+OPAQUE_VALUE = re.compile(r"^[A-Za-z0-9_\-+/=]{16,}$")
+
+# Names whose values are legitimately long and opaque. A git SHA and an API key
+# are the same forty hex characters, and nothing in the string tells them
+# apart — only the name does.
+ENV_NAME_EXEMPT = re.compile(
+    r"(?i)_(?:REF|SHA|COMMIT|VERSION|DIGEST|TAG|URL|URI|PATH|IMAGE|HOST|DIR|REGISTRY)$"
+)
+
 # Lines that are allowed to look like a credential, because saying "put your
 # key here" requires writing something key-shaped.
 SECRET_EXEMPT = re.compile(
@@ -225,6 +267,22 @@ def content_problems(path: str, staged: bool) -> list[str]:
                 continue
             problems.append(f"{path}:{lineno} looks like {what}")
             break
+
+    for lineno, text in lines:
+        m = ENV_ASSIGNMENT.match(text)
+        if not m or SECRET_EXEMPT.search(text):
+            continue
+        name, value = m.group("name"), m.group("val")
+        if ENV_NAME_EXEMPT.search(name) or REFERENCE.match(value):
+            continue
+        if not OPAQUE_VALUE.match(value):
+            continue
+        if not (any(c.isdigit() for c in value) and any(c.isalpha() for c in value)):
+            continue
+        problems.append(
+            f"{path}:{lineno} sets {name} to a long opaque literal — if that is "
+            f"a real value it does not belong here"
+        )
 
     # Prep-pack patterns apply where prep-pack content lives. Elsewhere this
     # table produces false positives on prose that discusses the risk — SPEC.md
