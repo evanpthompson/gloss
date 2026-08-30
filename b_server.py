@@ -90,15 +90,19 @@ for _w in _profile_warnings:
 SESSION_DIR = Path(os.environ.get("GLOSS_SESSION", "sessions/example"))
 MIN_CHARS = int(os.environ.get("GLOSS_MIN_CHARS", "25"))
 MAX_CARDS = int(os.environ.get("GLOSS_MAX_CARDS", "3"))
-# How long a card stays up after the last turn that raised its topic. Cards
-# used to be replaced wholesale every turn, so a topic discussed across four
-# turns flashed four times and nothing stayed readable long enough to be read.
-# Now a card persists and its clock is refreshed whenever the topic recurs.
+# How long a card stays up after the last turn that raised its topic, in
+# seconds. **0, the MVP default, means it stays until it is dismissed.**
 #
-# 90s is about two or three conversational turns: long enough that a glance
-# away and back still finds the card, short enough that the screen does not
-# accumulate a wall of things nobody is talking about any more.
-CARD_TTL_S = float(os.environ.get("GLOSS_CARD_TTL_S", "90"))
+# It was 90s, on the reasoning that two or three conversational turns is long
+# enough for a glance away and back. That reasoning had the wrong subject: the
+# card does not decide when it is read, the call does. In use roughly half the
+# cards in a session were never seen at all, because the moment they were on
+# screen was a moment that could not be spared for looking at a screen. A
+# clock cannot know that; the person can, and dismissing is one click.
+#
+# The cap (MAX_CARDS) is what keeps the screen from becoming a wall now, not
+# the clock. Set this above zero to get the old behaviour back.
+CARD_TTL_S = float(os.environ.get("GLOSS_CARD_TTL_S", "0"))
 # Errors clear themselves much faster. A transient failure that has already
 # recovered must not sit on screen claiming the tool is down — the next
 # successful turn will not necessarily overwrite it, because zero cards is the

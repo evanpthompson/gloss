@@ -133,6 +133,10 @@ class Display:
         """A presenter clicker is an HID keyboard; this is what it sends."""
         self.page.keyboard.press(name)
 
+    def click(self, label: str) -> None:
+        """The MVP dismissal: a card leaves when it is clicked."""
+        self.page.click(f".card:has(.label:text-is('{label}'))")
+
     @property
     def selected(self) -> str | None:
         return self.page.evaluate(
@@ -155,7 +159,10 @@ class Display:
         return self.page.evaluate("() => document.getElementById('idle')?.textContent ?? null")
 
 
-def card(id_: str, label: str, detail: str = "detail", ttl: float = 90, kind: str = "jargon") -> dict:
+def card(id_: str, label: str, detail: str = "detail", ttl: float = 0, kind: str = "jargon") -> dict:
+    """`ttl=0` is what the server now sends for content: no clock, stays until
+    dismissed. Tests that are about expiry pass a TTL explicitly, which is also
+    what a status card still carries."""
     return {"id": id_, "kind": kind, "label": label, "detail": detail, "ttl": ttl}
 
 
@@ -330,7 +337,7 @@ def test_the_payloads_the_server_actually_sends_render(page: Display) -> None:
     """Guards against the display and b_server drifting apart on shape."""
     payload = json.loads(
         '{"type":"cards","cards":[{"id":"kestrel","kind":"jargon","label":"Kestrel",'
-        '"detail":"Their deploy gate.","ttl":90}],"max":3}'
+        '"detail":"Their deploy gate.","ttl":0}],"max":3}'
     )
     page.turn(*payload["cards"], max_cards=payload["max"])
     assert page.labels == ["Kestrel"]
@@ -490,12 +497,78 @@ def test_dismiss_moves_the_selection_on(page: Display) -> None:
 
 
 def test_a_dismissed_card_is_gone_even_if_pinned(page: Display) -> None:
-    page.turn(card("kestrel", "Kestrel"))
+    page.turn(card("kestrel", "Kestrel", ttl=90))
     page.key("ArrowRight")
     page.key("Enter")               # pin
     page.key("x")                   # dismiss
     page.settle()
     assert page.labels == []
+
+
+# --- persistence: the MVP card stays until it is dismissed ------------------
+#
+# A clock cannot know when the call will let you look up. In use about half the
+# cards in a session were never seen, so content cards ship with no TTL at all
+# (`GLOSS_CARD_TTL_S=0`) and leave by click, by key, or by eviction. Status
+# cards keep their clock, because a message about a failure that has already
+# recovered goes stale whether or not anyone dismisses it.
+
+
+def test_a_card_without_a_ttl_does_not_leave_on_its_own(page: Display) -> None:
+    page.turn(card("kestrel", "Kestrel"))
+    page.wait(700)
+    assert page.labels == ["Kestrel"]
+
+
+def test_a_ttl_of_zero_is_not_read_as_expire_immediately(page: Display) -> None:
+    """The failure this guards is silent: `0` falling through a truthiness test
+    into the old 90s default would look identical until a card vanished."""
+    page.turn({"id": "kestrel", "kind": "jargon", "label": "Kestrel",
+               "detail": "d", "ttl": 0})
+    page.settle()
+    assert page.labels == ["Kestrel"]
+
+
+def test_a_click_dismisses_the_card_that_was_clicked(page: Display) -> None:
+    """Not the selected one. The mouse and the clicker are different hands."""
+    page.turn(card("kestrel", "Kestrel"), card("a2dp", "A2DP"))
+    page.key("ArrowRight")          # select A2DP, the newest
+    page.click("Kestrel")
+    page.settle()
+    assert page.labels == ["A2DP"]
+
+
+def test_a_click_dismisses_a_pinned_card_too(page: Display) -> None:
+    """Pinning is protection from eviction, not from the person."""
+    page.turn(card("kestrel", "Kestrel"))
+    page.key("ArrowRight")
+    page.key("Enter")
+    assert page.pinned == ["Kestrel"]
+    page.click("Kestrel")
+    page.settle()
+    assert page.labels == []
+
+
+def test_the_cap_still_bounds_a_screen_where_nothing_expires(page: Display) -> None:
+    """With the clock gone the cap is the only thing between the display and a
+    wall of stale topics, so it has to hold on cards that never expire."""
+    page.turn(card("a", "Alpha"))
+    page.turn(card("b", "Beta"))
+    page.turn(card("c", "Gamma"))
+    page.turn(card("d", "Delta"))
+    page.settle()
+    assert page.labels == ["Beta", "Gamma", "Delta"]
+
+
+def test_a_status_card_still_clears_itself(page: Display) -> None:
+    """The one thing that must keep a clock: nobody dismisses a message about a
+    vendor outage that has already ended."""
+    page.turn(card("kestrel", "Kestrel"))
+    page.turn({"id": "err", "kind": "error", "label": "Model provider overloaded",
+               "detail": "staged", "ttl": 0.3})
+    assert "Model provider overloaded" in page.labels
+    page.wait(700)
+    assert page.labels == ["Kestrel"]
 
 
 # --- blank ------------------------------------------------------------------

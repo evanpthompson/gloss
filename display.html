@@ -21,6 +21,9 @@
   .card {
     border-left: 4px solid var(--kind); padding: 1.4vh 0 1.4vh 1.6vw;
     animation: in 140ms ease-out;
+    /* A card is dismissed by clicking it, so it has to look like something you
+       can click. Nothing else on this screen is a target. */
+    cursor: pointer;
   }
   .card[data-kind="recall"] { --kind: var(--recall); }
   .card[data-kind="jargon"] { --kind: var(--jargon); }
@@ -34,16 +37,18 @@
     letter-spacing: 0.12em; color: var(--kind); margin-bottom: 0.4vh;
   }
   @keyframes in { from { opacity: 0; transform: translateY(6px); } }
-  /* Cards expire rather than being cleared, so they need a way out that does
-     not snap. Removal is the only motion on an otherwise still screen. */
+  /* A card leaves when it is dismissed or evicted, never on a clock, so it
+     needs a way out that does not snap. Removal is the only motion on an
+     otherwise still screen. */
   .card.out { opacity: 0; transition: opacity 220ms ease-in; }
   /* Selection is what a clicker acts on, so it has to be findable in a glance
      without becoming the loudest thing on screen. The border thickens; nothing
      moves, because movement is what the card lifecycle exists to avoid. */
   .card.sel { border-left-width: 10px; }
-  /* A pinned card outlives its TTL, so the screen has to say which ones will
-     not clear themselves — otherwise the display slowly fills for no visible
-     reason. */
+  /* Pinning is now protection from eviction rather than from a clock: a
+     pinned card is the last thing pushed off when the cap is reached. The
+     screen still has to say which ones, or a card that refuses to leave looks
+     like a bug. */
   .card.pin .tag::after { content: " · pinned"; opacity: 0.75; }
   #cards.blank { visibility: hidden; }
   /* Empty is the normal state, not an error — most turns produce no cards. */
@@ -169,6 +174,14 @@
   // Lifecycle is not a local policy: the TTL arrives on each card and the cap
   // arrives with the batch, so a second screen opened halfway through a call is
   // configured by the first message it receives.
+  //
+  // A card with no TTL, or a TTL of zero, stays until it is dismissed. That is
+  // the MVP default for content cards (`GLOSS_CARD_TTL_S=0`) and it came from
+  // use rather than from a measurement: you look up when the call lets you,
+  // not when a timer says to, so roughly half the cards in a session were
+  // never seen at all. Status cards still carry a TTL, because "the vendor was
+  // down 20 seconds ago" goes stale on its own and nobody dismisses a message
+  // about a problem that has already passed.
   const live = new Map();   // id -> { el, timer, touched, kind, pinned }
 
   // --- clicker control (Phase 4a) -----------------------------------------
@@ -214,7 +227,10 @@
     entry.pinned = !entry.pinned;
     entry.el.classList.toggle("pin", entry.pinned);
     clearTimeout(entry.timer);
-    if (!entry.pinned) entry.timer = setTimeout(() => remove(id), (entry.ttl ?? 90) * 1000);
+    // Only a card that had a clock gets it back. Unpinning a content card
+    // does not start one it never had.
+    if (!entry.pinned && entry.ttl > 0)
+      entry.timer = setTimeout(() => remove(id), entry.ttl * 1000);
   }
 
   function dismiss(id = selected) {
@@ -373,16 +389,22 @@
         el.className = "card";
         el.innerHTML = '<div class="tag"></div><div class="label"></div><div class="detail"></div>';
         fill(el, c);
+        // Click dismisses THIS card, not the selected one. On a second screen
+        // the mouse and the clicker are different hands, and dismissing
+        // something other than what was clicked is the kind of surprise that
+        // makes people stop touching the display mid-call.
+        el.addEventListener("click", () => dismiss(id));
         cards.appendChild(el);  // new topics append; existing ones never move
         entry = { el };
         live.set(id, entry);
       }
       entry.kind = c.kind;
-      entry.ttl = c.ttl ?? 90;
+      entry.ttl = c.ttl ?? 0;   // no TTL means it stays until dismissed
       entry.touched = Date.now();
       // A pinned card has been held on purpose. It ignores its TTL and every
       // refresh of it, until it is unpinned or dismissed.
-      if (!entry.pinned) entry.timer = setTimeout(() => remove(id), entry.ttl * 1000);
+      if (!entry.pinned && entry.ttl > 0)
+        entry.timer = setTimeout(() => remove(id), entry.ttl * 1000);
     }
     // Evict by least-recently-mentioned rather than oldest-created: a topic the
     // conversation keeps returning to should outlive a one-off from earlier.
