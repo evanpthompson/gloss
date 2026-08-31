@@ -47,7 +47,9 @@
     display: flex; flex-direction: column; gap: 0.6vh;
     transition: transform 120ms ease-out; will-change: transform;
   }
-  #detail-wrap { position: absolute; top: 50%; left: 3vw; right: 3vw; margin-top: 7vh; }
+  /* Bottom-anchored: a two-line detail at `top:50% + 7vh` overlapped the
+     row below the focus. Same fix as display.html. */
+  #detail-wrap { position: absolute; bottom: 6vh; left: 3vw; right: 3vw; }
 
   .row {
     display: flex; align-items: baseline; gap: 1vw;
@@ -77,6 +79,7 @@
   #detail {
     margin-left: 1.5vw; max-width: 60ch;
     font-size: clamp(13px, 1.4vw, 21px); color: var(--dim);
+    background: var(--bg); padding: 1vh 1vw;
     opacity: 0; transition: opacity 260ms ease-out;
   }
   #detail.on { opacity: 1; }

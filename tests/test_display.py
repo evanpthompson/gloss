@@ -26,6 +26,11 @@ DISPLAY = Path(__file__).resolve().parent.parent / "display.html"
 # indistinguishable from green.
 REQUIRED = os.environ.get("GLOSS_REQUIRE_BROWSER_TESTS", "") not in ("", "0", "false")
 
+# Port 1 is reserved and never listening, so the page's websocket fails fast
+# and stays failed. Any unreachable address would do; this one cannot collide
+# with something a developer happens to be running.
+DEAD_SOCKET = "ws://127.0.0.1:1/display"
+
 
 @pytest.fixture(scope="module")
 def browser():
@@ -56,7 +61,15 @@ def page(browser):
     these tests drive `render()` directly, which is the unit of behaviour."""
     ctx = browser.new_context()
     p = ctx.new_page()
-    p.goto(DISPLAY.as_uri())
+    # Pinned at a port nothing listens on, so the page cannot reach a real
+    # b_server. These tests drive render() directly and the socket is not part
+    # of what they assert -- but display.html connects on load, and a server
+    # running on the default 8765 (a developer testing the live pipe on the
+    # same machine, which is exactly when these get run) would push real cards
+    # into the page mid-test. That surfaced as one browser test failing in the
+    # full run and passing in isolation, which is the most expensive kind of
+    # flake: it looks like a real regression.
+    p.goto(DISPLAY.as_uri() + f"?ws={DEAD_SOCKET}")
     yield Display(p)
     ctx.close()
 
@@ -665,6 +678,26 @@ class Hud(Display):
         el = self.page.locator("#hud-detail")
         return el.text_content() if "on" in (el.get_attribute("class") or "") else None
 
+    def rows_overlapping_detail(self) -> list[str]:
+        """Labels of visible rows whose box intersects the detail's box.
+
+        Geometry, not styling: two elements can each be perfectly styled and
+        still occupy the same pixels. Rows faded to zero are excluded — an
+        invisible row sharing space with the detail costs nothing."""
+        return self.page.evaluate(
+            """() => {
+              const det = document.getElementById('hud-detail').getBoundingClientRect();
+              return [...document.querySelectorAll('.card')]
+                .filter(c => parseFloat(getComputedStyle(c).opacity) > 0.01)
+                .filter(c => {
+                  const r = c.getBoundingClientRect();
+                  return !(r.right < det.left || r.left > det.right ||
+                           r.bottom < det.top || r.top > det.bottom);
+                })
+                .map(c => c.querySelector('.label').textContent);
+            }"""
+        )
+
     @property
     def focus_centre_y(self) -> float:
         box = self.page.locator(".card.sel").bounding_box()
@@ -680,7 +713,7 @@ class Hud(Display):
 def hud(browser):
     ctx = browser.new_context(viewport={"width": 1280, "height": 800})
     p = ctx.new_page()
-    p.goto(DISPLAY.as_uri() + "?mode=wheel&dwell=200")
+    p.goto(DISPLAY.as_uri() + f"?mode=wheel&dwell=200&ws={DEAD_SOCKET}")
     yield Hud(p)
     ctx.close()
 
@@ -740,6 +773,39 @@ def test_detail_waits_for_dwell_and_leaves_the_instant_the_focus_moves(hud: Hud)
 
     hud.wait(300)
     assert hud.detail_shown == "Deploy gate."
+
+
+def test_the_detail_never_draws_through_a_row(hud: Hud) -> None:
+    """Geometry, which nothing here asserted before 2026-08-30.
+
+    The detail used to sit at `top: 50%; margin-top: 7vh` — a fixed offset that
+    assumes the next row is further down than that. In `tools/wheel_hud.html`,
+    which renders five rows, a detail long enough to wrap was drawn straight
+    through two of them; measured, before and after.
+
+    **This page was not affected**, and saying so matters more than a tidier
+    story: at `GLOSS_MAX_CARDS=3` the column is short enough that the old
+    offset cleared the last row, measured at 1280x720 and 1680x1050 with an
+    error card added. Reverting the fix does not fail this test. What it
+    guards is the invariant rather than the incident — if the cap rises or the
+    type grows, this is the check that notices, and every other HUD test would
+    still pass because they assert opacity, distance and font size and never
+    ask where anything is.
+    """
+    long_detail = (
+        "One logical write causes many physical writes, wearing the device out "
+        "faster than the write volume alone suggests. Theirs runs about 12x."
+    )
+    hud.turn(
+        card("kestrel", "Kestrel", detail="Their deploy gate."),
+        card("tail", "Tail latency", detail="The slowest requests, not the average."),
+        card("write-amp", "Write amplification", detail=long_detail),
+        max_cards=3,
+    )
+    hud.key("d")          # detail now, without waiting out the dwell
+    hud.settle()
+    assert hud.detail_shown == long_detail, "the detail did not render"
+    assert hud.rows_overlapping_detail() == []
 
 
 def test_d_shows_the_detail_without_waiting(hud: Hud) -> None:
