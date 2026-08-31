@@ -1037,9 +1037,113 @@ with no local source simply has nothing to expand, which is a silent no-op
 rather than a spinner. That is the shape to spec if this is picked up; the
 model-backed version is not.
 
-**Sequencing.** After run 3 and after § 4b decision 1 is settled, because both
-change what an expand action would even be attached to. Not before Phase 5, and
-not a Phase 5 blocker.
+**Sequencing.** ~~After run 3 and after § 4b decision 1 is settled.~~ That
+precondition is gone: the measurement track was stopped 2026-08-29 and no fifth
+run is coming, so nothing further is going to settle what expand attaches to by
+measurement. What replaced it is below.
+
+#### Two axes, flagging, and a configurable input map — proposed 2026-08-30
+
+Raised by Evan during the first live two-laptop run, at the wheel prototype:
+*"you can traverse thru the topics and such, i like the idea of expanding out
+info to the side… each navigation to the right would move over to increasing
+context and depth into the topic. then you could highlight a topic for further
+follow up or flag to breakout."* Written down here as a proposal, not started.
+
+**The wheel is not the input that works, and that is the first finding.**
+Observed, not measured: on a real wireless presenter at `wheel=4`, the wheel
+took a lot of travel for imprecise movement while the arrow keys were exact.
+That is one person on one device and it is not a result — but § 4b already
+holds that the wheel is *one input calling `step()`*, not the mechanism, so
+nothing rests on it. If the wheel is demoted from "the interaction" to "an
+optional input", the wheel axis is free for something else, which is what makes
+the proposal below cheap rather than a redesign.
+
+**Two axes.** Vertical moves between topics; horizontal moves into one.
+
+| degree | what is shown | where it comes from | exists today |
+|---|---|---|---|
+| 0 | the term, one row legible | the card's `label` | yes |
+| 1 | the detail line | the card's `detail` | yes — dwell, or `d` |
+| 2 | more of the source the card came from | prep-pack section (`recall`) or glossary entry (`jargon`) | no |
+| 3 | the whole section | the same source, untrimmed | no |
+
+Degrees 2 and 3 are **local-only**, which is the shape § "expand / go deeper"
+already landed on: both indexes only ever quote, so this is showing more of
+something already in memory. No vendor call, no per-press cost, no new
+mid-call failure mode — the three reasons the model-backed version was refused.
+Three degrees is a cap, not a target: a prep-pack section is finite, and past
+its end there is nothing further to show.
+
+**Availability has to be visible, not silent.** The earlier note said a card
+with no local source is "a silent no-op rather than a spinner", and that is
+wrong for an axis. A no-op is fine for a button pressed by mistake; an axis
+that sometimes moves and sometimes does not teaches the reader nothing and
+costs a press mid-call to discover. Error cards have no source at all, a
+`jargon` card with no glossary hit has no degree 2, and a `recall` card always
+has a section. So depth availability is part of the card's state and the row has
+to carry it — a mark on the kind label is enough, and it is static, which the
+HUD requires. Evan's framing, kept as the rule: **if it is not populated, the
+feature is not enabled.**
+
+**Flagging is a different verb from pinning, and must not be folded into it.**
+Pin means *do not evict this while the call runs*. Flag means *I am done with
+this now, come back to it after*. Overloading one key with both would make the
+common action ambiguous at the exact moment there is no attention to spare.
+A flag is small and concrete: the card's id and the transcript turn it was
+flagged on, appended server-side. That is the input the deferred **Tier 2
+post-call export** wants — it already plans a research pass over the saved
+transcript, and a list of moments the person marked is a better starting set
+than the whole transcript. Flagging is only worth building alongside that
+export; on its own it writes a file nothing reads.
+
+**The input budget is the constraint, again, and it is the reason this may not
+ship as specced.** § 4a documents what a presenter clicker actually emits:
+`PageUp`/`PageDown`, sometimes arrows, and usually one blank-screen key. Next,
+previous, pin, dismiss and blank already claim all of it. Two axes plus a flag
+needs six distinct inputs from a device that reliably sends three. The honest
+options, none of them free:
+
+1. **Mouse-and-keyboard only**, with the clicker limited to the vertical axis.
+   Depth becomes a thing you do when a hand is free, which is most of a call
+   but not the moments that matter most.
+2. **A modifier or a long-press** on the clicker. Long-press is invisible to
+   `keydown` alone and needs timing logic that fires on a held key, which
+   presenters repeat rather than hold.
+3. **A mode toggle** — one button switches the axis the wheel and arrows act
+   on. Cheapest in inputs, worst in state: a HUD where the same press does two
+   different things depending on invisible state is the failure this display
+   avoids everywhere else.
+
+**A configurable input map runs into a decision that already said no.**
+`display.html` removed the prototype's sliders on purpose — *"a HUD does not
+ship a control panel it should never show"* — and tuning became query params
+for exactly that reason. A settings surface inside the window contradicts it,
+and the contradiction is not resolved by making the panel small.
+
+What resolves it is *when*, not *how big*: configuration belongs to the state
+where there is no call — the display before it is connected, or a separate page
+— and what it produces is the same query string the HUD already reads. That
+keeps one mechanism, adds no in-call surface, and has a working precedent in
+this repo: `tools/listener_setup.py` does exactly this for Laptop A, asking the
+questions once and writing a launcher rather than adding runtime settings.
+Persisted per-machine, `localStorage` is the obvious store for the display's
+own copy, with the query string still winning so a shared link behaves the same
+for everyone.
+
+**What would settle whether any of this is right.** Not a lab run — that track
+is closed. The acceptance test is a real call, or a recorded one played through
+Laptop A, with three questions answered afterwards: was the depth axis reached
+for at all; did a flag get set that was worth having after; and did anyone hit
+the wrong axis. If depth is never reached for in a whole call, it is not a
+missing feature, and building it would have been the second most expensive kind
+of mistake — the kind that looks like progress.
+
+**Sequencing.** Behind the first real interview, deliberately. Everything here
+is a reaction to a prototype rather than to use, and one call will say more
+about which of the three is real than any amount of further design. Phase 5 is
+unaffected either way: the overlay is a window shell, and none of this changes
+the page.
 
 ### Phase 2 design
 

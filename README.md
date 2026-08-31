@@ -514,6 +514,18 @@ items alongside the reading layer that would.
   identity result, that a term is locked in about 150 ms, which is the number
   the HUD's one-legible-row design actually rests on. `SPEC.md` § Card
   interaction has the decision.
+- **Two-axis card navigation, flagging, and a configurable input map.**
+  Proposed 2026-08-30 at the wheel prototype, during the first live run:
+  vertical moves between topics, horizontal moves *into* one — three degrees,
+  each showing more of the prep-pack section or glossary entry the card already
+  came from, so no vendor call and no per-press cost. Plus a flag that marks a
+  moment for the post-call pass, which is a different verb from pin and must
+  not share its key. The blocker is the input budget — a presenter clicker
+  reliably sends three keys and this wants six — and a configurable map runs
+  into the standing decision that a HUD ships no control panel. `SPEC.md`
+  § Two axes, flagging, and a configurable input map has the shape, the three
+  ways out of the input problem, and what would settle whether any of it is
+  real. Sequenced behind the first real interview on purpose.
 - **Tier 2 post-call research export.** Unchanged from the original plan and
   still not started.
 - **Expand / go deeper on a card.** Raised 2026-08-28; **judged not essential to
