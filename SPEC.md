@@ -96,6 +96,21 @@ transcription of the interviewer too, not just the user. Dodge: laptop
 built-in mic for the user's voice, Bluetooth for output only. The headset
 stays on A2DP.
 
+**Hit live on the first two-laptop run, 2026-08-30, and it looked like success.**
+`a_listener.py` calls `sc.default_microphone()` when `A_LISTENER_MIC_NAME` is
+unset, and the default was a Bluetooth headset. The `user` channel transcribed
+flawlessly the entire time — which is exactly why this is worth a tool rather
+than a paragraph: the channel that degrades is the *interviewer's*, and nothing
+in the run says so.
+
+`tools/listener_setup.py` now picks both devices, flags anything whose name
+looks like a headset, and requires an explicit override to use one. Name
+matching is crude and is what there is: no OS exposes "opening this device will
+renegotiate your link codec" as a property. It also writes
+`A_LISTENER_SPEAKER_NAME`, added the same day, because the loopback output had
+been hardcoded to `sc.default_speaker()` — and on a machine with a headset, a
+monitor and built-in speakers, the default is whatever was plugged in last.
+
 **Python capture script on A, not browser capture.** `getDisplayMedia`
 needs an active screen-share to get Windows system audio, which lights the
 "you are sharing your screen" indicator for the whole interview. A

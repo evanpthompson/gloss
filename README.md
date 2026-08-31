@@ -43,19 +43,68 @@ uv run b_server.py
 It listens on `ws://0.0.0.0:8765/interviewer` and `.../user`. Find this
 Mac's LAN IP with `ipconfig getifaddr en0` (or the relevant interface).
 
-**Laptop A** (below is PowerShell; `soundcard` also runs on macOS and Linux —
-see `a_listener.py` for what changes per platform, and note that Laptop A is a
-role any device can fill, Android included, by speaking the same PCM-over-
-websocket contract):
+**Laptop A** — two files, no checkout. It needs no API keys and never talks to
+Deepgram or any model provider; it only ever talks to Laptop B, which is why
+its copy of the code is public content and losing that machine costs nothing.
 
+Start Laptop B **first** — the setup tool refuses to write anything it cannot
+reach. Then, on A (PowerShell shown; `soundcard` also runs on macOS and Linux):
+
+```powershell
+curl.exe -O https://raw.githubusercontent.com/evanpthompson/gloss/main/a_listener.py
+curl.exe -O https://raw.githubusercontent.com/evanpthompson/gloss/main/tools/listener_setup.py
+
+uv run --with soundcard python listener_setup.py
 ```
-uv sync
+
+`listener_setup.py` lists the audio devices, asks for Laptop B's address,
+checks the port actually answers, and writes `run_listener.cmd` (or
+`run_listener.sh`). Every call after that is one command:
+
+```powershell
+.\run_listener.cmd
+```
+
+A `.cmd` rather than a `.ps1` on purpose: PowerShell refuses to run an unsigned
+script under the default execution policy — *"running scripts is disabled on
+this system"* — and a setup tool should not hand you a second problem to
+solve.
+
+**It refuses two answers rather than warning about them**, because both fail
+invisibly:
+
+- **A Bluetooth microphone.** Opening a headset's mic drops the link from A2DP
+  to HFP, which collapses playback to ~16 kHz mono and degrades the
+  *interviewer's* channel — the one that produces cards. Your own voice still
+  transcribes perfectly, so nothing in the run tells you. Use the built-in mic
+  and keep the headset on output only.
+- **An unreachable Laptop B.** Checked with a TCP connect before anything is
+  written. `ConnectionRefusedError` ten minutes before a call is not when to
+  discover the server was never started.
+
+By hand instead, if you would rather not run the tool — or from a full checkout
+with `uv sync`:
+
+```powershell
+$env:A_LISTENER_MIC_NAME = "Microphone Array"      # substring; built-in, not the headset
+$env:A_LISTENER_SPEAKER_NAME = "Speakers"          # substring; whose output is the interviewer
 $env:B_SERVER_URL = "ws://<laptop-b-lan-ip>:8765"
-uv run a_listener.py
+uv run --with soundcard --with websockets --with numpy a_listener.py
 ```
 
-`a_listener.py` needs no API keys and never talks to Deepgram or any model
-provider directly — it only ever talks to Laptop B.
+| variable | what it does | if unset |
+|---|---|---|
+| `B_SERVER_URL` | where Laptop B is | `ws://192.168.1.100:8765` — a Phase 1 guess, almost certainly wrong |
+| `A_LISTENER_MIC_NAME` | substring picking your microphone | the OS default, which is the headset if one is paired |
+| `A_LISTENER_SPEAKER_NAME` | substring picking the output captured as the interviewer | the OS default, which is whatever was plugged in last |
+| `A_LISTENER_SAMPLE_RATE` | capture rate | `48000` |
+| `A_LISTENER_CHUNK_FRAMES` | frames per websocket send | `4800`, about 100 ms |
+
+Laptop A is a **role, not a platform**: B's requirement is two websocket
+streams of 16-bit mono PCM, so anything that can capture and send that can fill
+it — an Android phone included, without running this file. See `a_listener.py`
+for what changes per platform, loopback being the part operating systems
+disagree about.
 
 ## What "working" looks like
 

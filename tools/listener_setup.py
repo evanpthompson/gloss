@@ -84,11 +84,21 @@ def launcher_text(mic: str, speaker: str, url: str, windows: bool) -> str:
     """The script a person runs before each call. Written rather than printed
     so the choices survive closing the terminal."""
     if windows:
+        # .cmd rather than .ps1 deliberately. PowerShell refuses to run an
+        # unsigned script under the default execution policy —
+        # "running scripts is disabled on this system" — which turns a setup
+        # tool into a second problem to solve. A .cmd has no such gate.
+        #
+        # `set "VAR=value"` rather than `set VAR="value"`: the second form puts
+        # the quotes *inside* the value, and Windows device names like
+        # `Microphone Array (Realtek(R) Audio)` need the quoting to survive
+        # both the spaces and the parentheses.
         return (
-            "# Written by tools/listener_setup.py — re-run it to change these.\n"
-            f'$env:A_LISTENER_MIC_NAME = "{mic}"\n'
-            f'$env:A_LISTENER_SPEAKER_NAME = "{speaker}"\n'
-            f'$env:B_SERVER_URL = "{url}"\n'
+            "@echo off\n"
+            "REM Written by tools/listener_setup.py - re-run it to change these.\n"
+            f'set "A_LISTENER_MIC_NAME={mic}"\n'
+            f'set "A_LISTENER_SPEAKER_NAME={speaker}"\n'
+            f'set "B_SERVER_URL={url}"\n'
             "uv run --with soundcard --with websockets --with numpy a_listener.py\n"
         )
     return (
@@ -143,7 +153,7 @@ def main() -> int:
     print("  reachable.")
 
     windows = os.name == "nt"
-    out = args.out or Path("run_listener.ps1" if windows else "run_listener.sh")
+    out = args.out or Path("run_listener.cmd" if windows else "run_listener.sh")
     out.write_text(launcher_text(mic.name, speaker.name, f"ws://{host}:{args.port}", windows))
     if not windows:
         out.chmod(0o755)

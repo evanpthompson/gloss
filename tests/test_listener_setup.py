@@ -63,18 +63,30 @@ def test_the_launcher_sets_every_variable_a_listener_reads() -> None:
 
 
 def test_windows_and_posix_launchers_use_their_own_syntax() -> None:
-    ps = launcher_text("m", "s", "ws://h:1", windows=True)
+    cmd = launcher_text("m", "s", "ws://h:1", windows=True)
     sh = launcher_text("m", "s", "ws://h:1", windows=False)
-    assert "$env:A_LISTENER_MIC_NAME" in ps and "export" not in ps
-    assert 'export A_LISTENER_MIC_NAME="m"' in sh and "$env:" not in sh
+    assert 'set "A_LISTENER_MIC_NAME=m"' in cmd and "export" not in cmd
+    assert cmd.startswith("@echo off")
+    assert 'export A_LISTENER_MIC_NAME="m"' in sh and "set \"" not in sh
     assert sh.startswith("#!/usr/bin/env bash")
+
+
+def test_the_windows_launcher_is_not_a_powershell_script() -> None:
+    """PowerShell refuses to run an unsigned .ps1 under the default execution
+    policy — "running scripts is disabled on this system" — which turns the
+    setup tool into a second problem. A .cmd has no such gate, so nothing here
+    may use PowerShell syntax."""
+    cmd = launcher_text("m", "s", "ws://h:1", windows=True)
+    assert "$env:" not in cmd
 
 
 def test_device_names_with_brackets_survive_quoting() -> None:
     """Windows device names routinely contain parentheses — `Microphone Array
-    (Realtek(R) Audio)` — and an unquoted one would truncate the assignment."""
+    (Realtek(R) Audio)` — and cmd would otherwise treat them as syntax. The
+    `set "VAR=value"` form is what keeps them inside the value; `set VAR="v"`
+    would put the quotes in the value instead."""
     name = "Microphone Array (Realtek(R) Audio)"
-    assert f'"{name}"' in launcher_text(name, "s", "ws://h:1", windows=True)
+    assert f'set "A_LISTENER_MIC_NAME={name}"' in launcher_text(name, "s", "ws://h:1", windows=True)
     assert f'"{name}"' in launcher_text(name, "s", "ws://h:1", windows=False)
 
 
