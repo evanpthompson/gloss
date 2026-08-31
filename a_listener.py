@@ -39,6 +39,13 @@ CHUNK_FRAMES = int(os.environ.get("A_LISTENER_CHUNK_FRAMES", "4800"))  # ~100ms 
 # (e.g. "Realtek"). Leave unset to use the default microphone.
 MIC_NAME_SUBSTRING = os.environ.get("A_LISTENER_MIC_NAME")
 
+# Substring to pick which output device is captured for the interviewer,
+# instead of whatever the OS calls the default. On a machine with a headset,
+# a monitor's speakers and the built-in ones, "the default" is whatever was
+# plugged in last, and capturing the wrong one is silent — the channel simply
+# stays empty. `tools/listener_setup.py` writes both of these.
+SPEAKER_NAME_SUBSTRING = os.environ.get("A_LISTENER_SPEAKER_NAME")
+
 
 def to_pcm16(frames: np.ndarray) -> bytes:
     mono = frames[:, 0]
@@ -46,7 +53,10 @@ def to_pcm16(frames: np.ndarray) -> bytes:
 
 
 def interviewer_recorder():
-    speaker = sc.default_speaker()
+    if SPEAKER_NAME_SUBSTRING:
+        speaker = sc.get_speaker(SPEAKER_NAME_SUBSTRING)
+    else:
+        speaker = sc.default_speaker()
     loopback_mic = sc.get_microphone(speaker.id, include_loopback=True)
     return loopback_mic.recorder(samplerate=SAMPLE_RATE, channels=1)
 
